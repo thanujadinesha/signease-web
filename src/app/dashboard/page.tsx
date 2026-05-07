@@ -455,7 +455,7 @@ function DownloadStep({
       page.drawImage(pngImage, { x: 0, y: 0, width: doc.natW, height: doc.natH });
       const pdfBytes = await pdfDoc.save();
 
-      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const blob = new Blob([pdfBytes.buffer as ArrayBuffer], { type: 'application/pdf' });
       const url  = URL.createObjectURL(blob);
       const name = `signed-${doc.file.name.replace(/\.[^.]+$/, '')}.pdf`;
       setBlobUrl(url);
