@@ -217,9 +217,8 @@ function SignatureStep({ onNext }: { onNext: (sig: SigData) => void }) {
 // ─── Step 2: Document ─────────────────────────────────────────────────────────
 
 async function renderPdfPage(file: File): Promise<{ dataUrl: string; natW: number; natH: number }> {
-  // Run PDF.js in the main thread (no worker) — avoids ESM/CJS worker loading issues
   const pdfjsLib = await import('pdfjs-dist');
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
   const arrayBuffer = await file.arrayBuffer();
   const pdf   = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
   const page  = await pdf.getPage(1);
@@ -259,7 +258,7 @@ function DocumentStep({ onNext, onBack }: { onNext: (doc: DocData) => void; onBa
         });
         setDoc({ file, type: 'image', pageDataUrl: dataUrl, natW: img.naturalWidth, natH: img.naturalHeight });
       }
-    } catch { setError('Failed to load file. Please try a different file.'); }
+    } catch (err) { setError(`Failed to load file: ${err instanceof Error ? err.message : String(err)}`); }
     setLoading(false);
   }
 
