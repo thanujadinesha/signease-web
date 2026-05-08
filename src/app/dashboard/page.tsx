@@ -217,9 +217,9 @@ function SignatureStep({ onNext }: { onNext: (sig: SigData) => void }) {
 // ─── Step 2: Document ─────────────────────────────────────────────────────────
 
 async function renderPdfPage(file: File): Promise<{ dataUrl: string; natW: number; natH: number }> {
-  // Use legacy CJS worker (.js) — the ESM .mjs worker fails in many browser environments
-  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.js');
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/legacy/build/pdf.worker.min.js`;
+  // Run PDF.js in the main thread (no worker) — avoids ESM/CJS worker loading issues
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '';
   const arrayBuffer = await file.arrayBuffer();
   const pdf   = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
   const page  = await pdf.getPage(1);

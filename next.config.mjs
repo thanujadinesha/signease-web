@@ -4,8 +4,6 @@ const nextConfig = {
   webpack: (config) => {
     // Suppress pdfjs canvas optional dependency warning
     config.resolve.alias.canvas = false;
-    // Allow pdfjs legacy CJS build
-    config.resolve.alias['pdfjs-dist'] = 'pdfjs-dist/legacy/build/pdf.js';
     return config;
   },
 };
