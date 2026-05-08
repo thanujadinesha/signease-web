@@ -217,16 +217,19 @@ function SignatureStep({ onNext }: { onNext: (sig: SigData) => void }) {
 // ─── Step 2: Document ─────────────────────────────────────────────────────────
 
 async function renderPdfPage(file: File): Promise<{ dataUrl: string; natW: number; natH: number }> {
-  const pdfjsLib = await import('pdfjs-dist');
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs`;
+  // Use legacy CJS worker (.js) — the ESM .mjs worker fails in many browser environments
+  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.js');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/legacy/build/pdf.worker.min.js`;
   const arrayBuffer = await file.arrayBuffer();
-  const pdf   = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pdf   = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
   const page  = await pdf.getPage(1);
   const vp    = page.getViewport({ scale: 2 });
   const canvas = document.createElement('canvas');
   canvas.width  = vp.width;
   canvas.height = vp.height;
-  await page.render({ canvasContext: canvas.getContext('2d')!, viewport: vp }).promise;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D context unavailable');
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
   return { dataUrl: canvas.toDataURL('image/png'), natW: vp.width, natH: vp.height };
 }
 
