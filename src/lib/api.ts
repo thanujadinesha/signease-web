@@ -34,6 +34,19 @@ export interface UserProfile {
   createdAt: string;
 }
 
+export interface AdminUser {
+  id: string; email: string; tier: string; isAdmin: boolean;
+  signaturesUsed: number; documentCount: number;
+  limit: number; remaining: number | null; isUnlimited: boolean;
+  planExpiresAt: string | null; extraSeats: number; createdAt: string;
+  lastActivityAt: string | null;
+}
+export interface AdminDoc { id: string; document_name: string; signed_at: string; }
+export interface AdminActivity {
+  id: string; document_name: string; signed_at: string;
+  user_id: string; email: string; tier: string;
+}
+
 export interface AuthResponse {
   token: string;
   user: UserProfile;
@@ -63,6 +76,37 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ documentName }),
       }),
+  },
+  admin: {
+    stats: () => request<{
+      totalUsers: number; totalSignatures: number; totalDocuments: number;
+      signaturesThisWeek: number;
+      tierBreakdown: { tier: string; count: number }[];
+    }>('/api/admin/stats'),
+
+    users: (params?: { search?: string; tier?: string; page?: number; limit?: number }) => {
+      const q = new URLSearchParams();
+      if (params?.search) q.set('search', params.search);
+      if (params?.tier)   q.set('tier',   params.tier);
+      if (params?.page)   q.set('page',   String(params.page));
+      if (params?.limit)  q.set('limit',  String(params.limit));
+      return request<{
+        users: AdminUser[]; total: number; page: number; pages: number;
+      }>(`/api/admin/users?${q}`);
+    },
+
+    user: (id: string) => request<{ user: AdminUser; documents: AdminDoc[] }>(`/api/admin/users/${id}`),
+
+    updateUser: (id: string, body: { tier?: string; signaturesUsed?: number; extraSeats?: number; resetUsage?: boolean }) =>
+      request<{ user: AdminUser }>(`/api/admin/users/${id}`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
+
+    deleteUser: (id: string) =>
+      request<{ success: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' }),
+
+    activity: (limit = 50) =>
+      request<{ activity: AdminActivity[] }>(`/api/admin/activity?limit=${limit}`),
   },
   billing: {
     checkout: (plan: 'pro' | 'premium' | 'seat') =>
