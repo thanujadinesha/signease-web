@@ -64,4 +64,15 @@ export const api = {
         body: JSON.stringify({ documentName }),
       }),
   },
+  billing: {
+    checkout: (plan: 'pro' | 'premium' | 'seat') =>
+      request<{ url: string }>('/api/billing/checkout', {
+        method: 'POST',
+        body: JSON.stringify({ plan }),
+      }),
+    plans: () => request<{
+      plans: { id: string; name: string; price: number; period: string | null; signatures: number; features: string[] }[];
+      seatPrice: number;
+    }>('/api/billing/plans'),
+  },
 };
