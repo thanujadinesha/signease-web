@@ -10,11 +10,18 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const router  = useRouter();
   const path    = usePathname();
 
+  const isLoginPage = path === '/admin/login';
+
   useEffect(() => {
+    // Skip auth check on the login page itself — avoids infinite redirect loop
+    if (isLoginPage) { setChecking(false); return; }
     api.admin.stats()
       .then(() => setChecking(false))
       .catch(() => router.replace('/admin/login'));
-  }, []);
+  }, [isLoginPage]);
+
+  // On the login page render children directly — no sidebar, no auth spinner
+  if (isLoginPage) return <>{children}</>;
 
   if (checking) {
     return (
