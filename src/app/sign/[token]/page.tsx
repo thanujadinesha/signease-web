@@ -281,7 +281,13 @@ export default function PublicSignPage() {
       }
 
       const pdfBytes = await pdfDoc.save();
-      const base64   = btoa(String.fromCharCode(...pdfBytes));
+      // Convert in chunks to avoid "Maximum call stack size exceeded" on large PDFs
+      let binary = '';
+      const CHUNK = 8192;
+      for (let i = 0; i < pdfBytes.length; i += CHUNK) {
+        binary += String.fromCharCode(...pdfBytes.subarray(i, i + CHUNK));
+      }
+      const base64   = btoa(binary);
       const signedPdf = `data:application/pdf;base64,${base64}`;
 
       // Submit to backend
