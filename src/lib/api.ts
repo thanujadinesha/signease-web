@@ -108,6 +108,33 @@ export const api = {
     activity: (limit = 50) =>
       request<{ activity: AdminActivity[] }>(`/api/admin/activity?limit=${limit}`),
   },
+  requests: {
+    create: (body: {
+      documentName: string;
+      documentData: string;
+      documentType?: string;
+      recipientEmail?: string;
+      message?: string;
+      placements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number }[];
+    }) => request<{ id: string; token: string; createdAt: string }>('/api/requests', {
+      method: 'POST', body: JSON.stringify(body),
+    }),
+    list: () => request<{
+      requests: { id: string; documentName: string; recipientEmail: string | null; status: string; token: string; createdAt: string; signedAt: string | null }[];
+    }>('/api/requests'),
+    get: (token: string) => request<{
+      id: string; documentName: string; documentData: string; documentType: string;
+      recipientEmail: string | null; message: string | null;
+      placements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number }[];
+      createdAt: string;
+    }>(`/api/requests/${token}`),
+    sign: (token: string, signedPdf: string) =>
+      request<{ success: boolean }>(`/api/requests/${token}/sign`, {
+        method: 'POST', body: JSON.stringify({ signedPdf }),
+      }),
+    getSigned: (token: string) =>
+      request<{ signedPdf: string; documentName: string }>(`/api/requests/${token}/signed`),
+  },
   billing: {
     checkout: (plan: 'pro' | 'premium' | 'seat') =>
       request<{ url: string }>('/api/billing/checkout', {
