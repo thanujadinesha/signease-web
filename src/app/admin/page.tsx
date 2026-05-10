@@ -49,7 +49,7 @@ export default function AdminDashboard() {
     <div className="p-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-text1">Dashboard</h1>
-        <p className="text-text2 text-sm mt-1">Overview of your SignEase platform</p>
+        <p className="text-text2 text-sm mt-1">Overview of your iSigner platform</p>
       </div>
 
       {/* Stat cards */}

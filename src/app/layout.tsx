@@ -3,8 +3,8 @@ import './globals.css';
 import { AuthProvider } from '@/lib/auth-context';
 
 export const metadata: Metadata = {
-  title: 'SignEase — Document Signing',
-  description: 'Sign documents online in seconds',
+  title: 'iSigner — Sign Anywhere. Securely.',
+  description: 'Sign documents online in seconds with iSigner',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

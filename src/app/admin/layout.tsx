@@ -43,7 +43,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       {/* Sidebar */}
       <aside className="w-56 shrink-0 border-r border-border bg-surface flex flex-col">
         <div className="px-5 py-4 border-b border-border">
-          <p className="text-xs font-bold text-text3 uppercase tracking-widest">SignEase</p>
+          <p className="text-xs font-bold text-text3 uppercase tracking-widest">iSigner</p>
           <p className="text-sm font-bold text-accent2 mt-0.5">Admin Panel</p>
         </div>
         <nav className="flex-1 p-3 space-y-1">
