@@ -54,7 +54,50 @@ async function renderPdfAllPages(dataUrl: string): Promise<{ dataUrl: string; na
 
 // ─── Download composite ───────────────────────────────────────────────────────
 
-function DownloadButton({ detail }: { detail: RequestDetail }) {
+type RenderedPage = { dataUrl: string; natW: number; natH: number };
+
+async function compositePdf(
+  pages: RenderedPage[],
+  detail: RequestDetail,
+): Promise<Blob> {
+  const completedSlots = detail.slots.filter(s => s.signed_at && s.signature_data);
+  const pdfDoc = await PDFDocument.create();
+
+  for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
+    const pageInfo = pages[pageIdx];
+    const canvas = document.createElement('canvas');
+    canvas.width = pageInfo.natW; canvas.height = pageInfo.natH;
+    const ctx = canvas.getContext('2d')!;
+
+    ctx.drawImage(await loadImage(pageInfo.dataUrl), 0, 0);
+
+    for (const slot of completedSlots.sort((a, b) => a.slot - b.slot)) {
+      const sigImg = await loadImage(slot.signature_data!);
+      const spotsOnPage = detail.placements.filter(p => p.slot === slot.slot && p.page === pageIdx);
+      for (const p of spotsOnPage) {
+        ctx.drawImage(sigImg, p.x, p.y, p.w, p.h);
+      }
+    }
+
+    const pngBytes = await fetch(canvas.toDataURL('image/png')).then(r => r.arrayBuffer());
+    const pngImage = await pdfDoc.embedPng(pngBytes);
+    const pdfPage  = pdfDoc.addPage([pageInfo.natW, pageInfo.natH]);
+    pdfPage.drawImage(pngImage, { x: 0, y: 0, width: pageInfo.natW, height: pageInfo.natH });
+  }
+
+  const pdfBytes = await pdfDoc.save();
+  return new Blob([pdfBytes.buffer as ArrayBuffer], { type: 'application/pdf' });
+}
+
+function DownloadButton({
+  detail,
+  preRenderedPages,
+  renderProgress,
+}: {
+  detail: RequestDetail;
+  preRenderedPages: RenderedPage[] | null;
+  renderProgress: string;
+}) {
   const [generating, setGenerating] = useState(false);
   const [blobUrl,    setBlobUrl]    = useState('');
   const [fileName,   setFileName]   = useState('');
@@ -62,48 +105,17 @@ function DownloadButton({ detail }: { detail: RequestDetail }) {
   const generate = useCallback(async () => {
     setGenerating(true);
     try {
-      const pages = detail.documentType === 'pdf'
-        ? await renderPdfAllPages(detail.documentData)
-        : await (async () => {
-            const img = await loadImage(detail.documentData);
-            return [{ dataUrl: detail.documentData, natW: img.naturalWidth, natH: img.naturalHeight }];
-          })();
-
-      const completedSlots = detail.slots.filter(s => s.signed_at && s.signature_data);
-      const pdfDoc = await PDFDocument.create();
-
-      for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
-        const pageInfo = pages[pageIdx];
-        const canvas = document.createElement('canvas');
-        canvas.width = pageInfo.natW; canvas.height = pageInfo.natH;
-        const ctx = canvas.getContext('2d')!;
-
-        // Draw document page
-        ctx.drawImage(await loadImage(pageInfo.dataUrl), 0, 0);
-
-        // Draw each signer's signature at their placements (in slot order)
-        for (const slot of completedSlots.sort((a, b) => a.slot - b.slot)) {
-          const sigImg = await loadImage(slot.signature_data!);
-          const spotsOnPage = detail.placements.filter(p => p.slot === slot.slot && p.page === pageIdx);
-          for (const p of spotsOnPage) {
-            ctx.drawImage(sigImg, p.x, p.y, p.w, p.h);
-          }
-        }
-
-        const composited = canvas.toDataURL('image/png');
-        const pngBytes   = await fetch(composited).then(r => r.arrayBuffer());
-        const pngImage   = await pdfDoc.embedPng(pngBytes);
-        const pdfPage    = pdfDoc.addPage([pageInfo.natW, pageInfo.natH]);
-        pdfPage.drawImage(pngImage, { x: 0, y: 0, width: pageInfo.natW, height: pageInfo.natH });
+      let pages = preRenderedPages;
+      if (!pages) {
+        pages = detail.documentType === 'pdf'
+          ? await renderPdfAllPages(detail.documentData)
+          : await (async () => {
+              const img = await loadImage(detail.documentData);
+              return [{ dataUrl: detail.documentData, natW: img.naturalWidth, natH: img.naturalHeight }];
+            })();
       }
 
-      const pdfBytes = await pdfDoc.save();
-      // Chunked btoa to avoid call stack overflow on large PDFs
-      let binary = '';
-      for (let i = 0; i < pdfBytes.length; i += 8192) {
-        binary += String.fromCharCode(...pdfBytes.subarray(i, i + 8192));
-      }
-      const blob = new Blob([pdfBytes.buffer as ArrayBuffer], { type: 'application/pdf' });
+      const blob = await compositePdf(pages, detail);
       setBlobUrl(URL.createObjectURL(blob));
       setFileName(`signed-${detail.documentName.replace(/\.[^.]+$/, '')}.pdf`);
     } catch (e) {
@@ -111,7 +123,7 @@ function DownloadButton({ detail }: { detail: RequestDetail }) {
       alert('Failed to generate PDF. Please try again.');
     }
     setGenerating(false);
-  }, [detail]);
+  }, [detail, preRenderedPages]);
 
   if (blobUrl) {
     return (
@@ -123,11 +135,22 @@ function DownloadButton({ detail }: { detail: RequestDetail }) {
     );
   }
 
+  // Pages still pre-rendering in background
+  if (!preRenderedPages && renderProgress) {
+    return (
+      <button disabled
+        className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-success/60 text-white font-semibold cursor-not-allowed">
+        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+        {renderProgress}
+      </button>
+    );
+  }
+
   return (
     <button onClick={generate} disabled={generating}
       className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-success text-white font-semibold hover:bg-success/90 transition-colors disabled:opacity-60">
       {generating ? (
-        <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Generating…</>
+        <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Compositing…</>
       ) : (
         <><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>Download signed PDF</>
       )}
@@ -139,10 +162,13 @@ function DownloadButton({ detail }: { detail: RequestDetail }) {
 
 function RequestDetailContent() {
   const { id }  = useParams<{ id: string }>();
-  const [detail,  setDetail]  = useState<RequestDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState('');
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [detail,          setDetail]          = useState<RequestDetail | null>(null);
+  const [loading,         setLoading]         = useState(true);
+  const [error,           setError]           = useState('');
+  const [preRenderedPages, setPreRenderedPages] = useState<RenderedPage[] | null>(null);
+  const [renderProgress,  setRenderProgress]  = useState('');
+  const intervalRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const preRenderDone = useRef(false);
 
   function fetchDetail() {
     api.requests.getById(id)
@@ -165,6 +191,50 @@ function RequestDetailContent() {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [id]);
 
+  // Pre-render PDF pages in background once document is complete
+  useEffect(() => {
+    if (!detail || detail.status !== 'completed' || preRenderDone.current) return;
+    preRenderDone.current = true;
+
+    async function preRender() {
+      if (!detail) return;
+      if (detail.documentType !== 'pdf') {
+        try {
+          const img = await loadImage(detail.documentData);
+          setPreRenderedPages([{ dataUrl: detail.documentData, natW: img.naturalWidth, natH: img.naturalHeight }]);
+        } catch { /* fall back to on-click render */ }
+        return;
+      }
+      try {
+        const pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+        const base64 = detail.documentData.split(',')[1];
+        const binary = atob(base64);
+        const bytes  = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+        const total = pdf.numPages;
+        const pages: RenderedPage[] = [];
+        for (let p = 1; p <= total; p++) {
+          setRenderProgress(`Preparing download… (${p}/${total})`);
+          const page = await pdf.getPage(p);
+          const vp   = page.getViewport({ scale: 1.5 });
+          const canvas = document.createElement('canvas');
+          canvas.width = vp.width; canvas.height = vp.height;
+          await page.render({ canvasContext: canvas.getContext('2d')!, viewport: vp }).promise;
+          pages.push({ dataUrl: canvas.toDataURL('image/png'), natW: vp.width, natH: vp.height });
+        }
+        setPreRenderedPages(pages);
+        setRenderProgress('');
+      } catch {
+        // pre-render failed — DownloadButton will fall back to on-click render
+        setRenderProgress('');
+      }
+    }
+
+    preRender();
+  }, [detail]);
+
   if (loading) return (
     <div className="flex items-center justify-center h-64">
       <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
@@ -185,7 +255,7 @@ function RequestDetailContent() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
           </Link>
           <span className="text-base font-bold text-text1 flex-1 truncate">{detail.documentName}</span>
-          {isComplete && <DownloadButton detail={detail} />}
+          {isComplete && <DownloadButton detail={detail} preRenderedPages={preRenderedPages} renderProgress={renderProgress} />}
         </div>
       </div>
 
@@ -262,7 +332,7 @@ function RequestDetailContent() {
 
         {isComplete && (
           <div className="mt-6 flex justify-center">
-            <DownloadButton detail={detail} />
+            <DownloadButton detail={detail} preRenderedPages={preRenderedPages} renderProgress={renderProgress} />
           </div>
         )}
       </div>
