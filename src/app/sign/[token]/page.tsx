@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type SigMode = 'draw' | 'type';
-type PageStatus = 'loading' | 'ready' | 'signing' | 'done' | 'already_signed' | 'not_your_turn' | 'all_complete' | 'error';
+type PageStatus = 'loading' | 'ready' | 'preview' | 'signing' | 'done' | 'already_signed' | 'not_your_turn' | 'all_complete' | 'error';
 
 interface Placement { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number }
 interface CompletedSlot { slot: number; label: string; signatureData: string; signedAt: string; placements: Placement[] }
@@ -221,8 +221,123 @@ function SignaturePad({ onCapture, disabled }: { onCapture: (dataUrl: string) =>
       )}
 
       <button onClick={capture} disabled={!canProceed || disabled} className="btn-primary w-full disabled:opacity-50">
-        Apply My Signature →
+        Preview Signature →
       </button>
+    </div>
+  );
+}
+
+// ─── Signature preview pane ───────────────────────────────────────────────────
+
+function SignaturePreview({ sigDataUrl, pageImages, signerData, onConfirm, onRedo }: {
+  sigDataUrl: string;
+  pageImages: { dataUrl: string; natW: number; natH: number }[];
+  signerData: SignerData;
+  onConfirm: () => void;
+  onRedo: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [displayW, setDisplayW] = useState(0);
+  const [previewPage, setPreviewPage] = useState(() => {
+    // Default to first page that has a spot for this signer
+    const firstPage = signerData.myPlacements[0]?.page ?? 0;
+    return firstPage;
+  });
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const obs = new ResizeObserver(e => setDisplayW(e[0].contentRect.width));
+    obs.observe(ref.current);
+    return () => obs.disconnect();
+  }, []);
+
+  const pagesWithMySpots = [...new Set(signerData.myPlacements.map(p => p.page))];
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-10 h-10 rounded-full bg-accent/10 border border-accent/30 flex items-center justify-center shrink-0">
+          <svg className="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+        </div>
+        <div>
+          <p className="text-sm font-bold text-text1">Preview your signature</p>
+          <p className="text-xs text-text3">This is how it will appear on the document</p>
+        </div>
+      </div>
+
+      {/* Signature preview box */}
+      <div className="card p-4 mb-4 bg-white">
+        <p className="text-xs font-semibold text-text3 uppercase tracking-wider mb-2">Your signature</p>
+        <div className="rounded-xl border border-border bg-gray-50 p-3 flex items-center justify-center" style={{ minHeight: 80 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={sigDataUrl} alt="Your signature" className="max-h-20 object-contain" style={{ maxWidth: '100%' }} />
+        </div>
+      </div>
+
+      {/* Page tabs — only show pages with this signer's spots */}
+      {pagesWithMySpots.length > 1 && (
+        <div className="flex gap-2 mb-3 overflow-x-auto pb-1">
+          {pagesWithMySpots.map(pageIdx => (
+            <button key={pageIdx} onClick={() => setPreviewPage(pageIdx)}
+              className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                previewPage === pageIdx ? 'bg-accent text-white' : 'bg-surface2 border border-border text-text2 hover:border-accent'
+              }`}>
+              Page {pageIdx + 1}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Document page with signature placed */}
+      <div ref={ref} className="relative rounded-xl overflow-hidden border-2 border-accent/40 mb-5" style={{ background: '#f5f5f5' }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={pageImages[previewPage].dataUrl} alt={`Page ${previewPage + 1}`} className="w-full block" draggable={false} />
+
+        {/* Already-completed slots */}
+        {signerData.completedSlots.map(slot =>
+          slot.placements.filter(p => p.page === previewPage).map((p, i) => {
+            const scale = displayW > 0 ? displayW / p.pageW : 1;
+            return (
+              <div key={`done-${slot.slot}-${i}`} style={{ left: p.x * scale, top: p.y * scale, width: p.w * scale, height: p.h * scale }} className="absolute">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={slot.signatureData} alt={slot.label} className="w-full h-full object-contain" />
+              </div>
+            );
+          })
+        )}
+
+        {/* MY signature overlaid at my spots */}
+        {signerData.myPlacements.filter(p => p.page === previewPage).map((p, i) => {
+          const scale = displayW > 0 ? displayW / p.pageW : 1;
+          return (
+            <div key={`mine-${i}`} style={{ left: p.x * scale, top: p.y * scale, width: p.w * scale, height: p.h * scale }} className="absolute">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={sigDataUrl} alt="Your signature" className="w-full h-full object-contain" />
+            </div>
+          );
+        })}
+
+        {/* Preview badge */}
+        <div className="absolute top-2 left-2 px-2 py-1 rounded-lg bg-accent/90 text-white text-[10px] font-bold">
+          Preview
+        </div>
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex gap-3">
+        <button onClick={onRedo}
+          className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border border-border text-text2 text-sm font-semibold hover:border-danger hover:text-danger transition-colors">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          Redo signature
+        </button>
+        <button onClick={onConfirm}
+          className="flex-[2] flex items-center justify-center gap-2 py-3 rounded-xl bg-success text-white text-sm font-semibold hover:bg-success/90 transition-colors">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          Confirm &amp; Submit
+        </button>
+      </div>
+      <p className="text-xs text-text3 text-center mt-3">Once confirmed, your signature cannot be changed.</p>
     </div>
   );
 }
@@ -232,12 +347,13 @@ function SignaturePad({ onCapture, disabled }: { onCapture: (dataUrl: string) =>
 export default function PublicSignPage() {
   const { token } = useParams<{ token: string }>();
 
-  const [status,      setStatus]      = useState<PageStatus>('loading');
-  const [signerData,  setSignerData]  = useState<SignerData | null>(null);
-  const [pageImages,  setPageImages]  = useState<{ dataUrl: string; natW: number; natH: number }[]>([]);
-  const [currentPage, setCurrentPage] = useState(0);
-  const [errorMsg,    setErrorMsg]    = useState('');
-  const [isComplete,  setIsComplete]  = useState(false);
+  const [status,       setStatus]       = useState<PageStatus>('loading');
+  const [signerData,   setSignerData]   = useState<SignerData | null>(null);
+  const [pageImages,   setPageImages]   = useState<{ dataUrl: string; natW: number; natH: number }[]>([]);
+  const [currentPage,  setCurrentPage]  = useState(0);
+  const [errorMsg,     setErrorMsg]     = useState('');
+  const [isComplete,   setIsComplete]   = useState(false);
+  const [pendingSigDataUrl, setPendingSigDataUrl] = useState('');
 
   useEffect(() => {
     api.requests.getForSigner(token)
@@ -261,18 +377,25 @@ export default function PublicSignPage() {
       });
   }, [token]);
 
-  const handleSign = useCallback(async (signatureData: string) => {
-    if (!signerData) return;
+  // Step 1: capture → show preview
+  const handlePreview = useCallback((sigDataUrl: string) => {
+    setPendingSigDataUrl(sigDataUrl);
+    setStatus('preview');
+  }, []);
+
+  // Step 2: confirm preview → submit to backend
+  const handleSign = useCallback(async () => {
+    if (!signerData || !pendingSigDataUrl) return;
     setStatus('signing');
     try {
-      const res = await api.requests.sign(token, signatureData);
+      const res = await api.requests.sign(token, pendingSigDataUrl);
       setIsComplete(res.complete);
       setStatus('done');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to submit signature');
       setStatus('error');
     }
-  }, [signerData, token]);
+  }, [signerData, token, pendingSigDataUrl]);
 
   // ── Loading ──
   if (status === 'loading') return (
@@ -314,6 +437,29 @@ export default function PublicSignPage() {
         ? 'All parties have now signed. The document owner has been notified and can download the final document.'
         : 'Thank you! The next signer has been notified by email and will be prompted to sign.'}
     />
+  );
+
+  // ── Preview ──
+  if (status === 'preview' && signerData && pageImages.length > 0) return (
+    <div className="min-h-screen bg-bg">
+      <div className="border-b border-border bg-surface/80 backdrop-blur-sm sticky top-0 z-10">
+        <div className="max-w-2xl mx-auto px-6 py-4 flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-purple-700 flex items-center justify-center shadow-[0_0_16px_rgba(139,92,246,0.4)]">
+            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          </div>
+          <span className="text-base font-bold text-text1 flex-1">SignEase · Signature Preview</span>
+        </div>
+      </div>
+      <div className="max-w-2xl mx-auto px-6 py-8">
+        <SignaturePreview
+          sigDataUrl={pendingSigDataUrl}
+          pageImages={pageImages}
+          signerData={signerData}
+          onConfirm={handleSign}
+          onRedo={() => setStatus('ready')}
+        />
+      </div>
+    </div>
   );
 
   // ── Signing in progress (spinner) ──
@@ -423,7 +569,7 @@ export default function PublicSignPage() {
               <p className="text-xs text-text3">{signerData.myPlacements.length} spot{signerData.myPlacements.length !== 1 ? 's' : ''} across all pages</p>
             </div>
           </div>
-          <SignaturePad onCapture={handleSign} />
+          <SignaturePad onCapture={handlePreview} />
         </div>
 
         <p className="text-xs text-text3 text-center">
