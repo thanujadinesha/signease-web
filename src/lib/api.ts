@@ -43,8 +43,18 @@ export interface AdminUser {
 }
 export interface AdminDoc { id: string; document_name: string; signed_at: string; }
 export interface AdminActivity {
+  type: 'quick_sign' | 'slot_signed';
   id: string; document_name: string; signed_at: string;
   user_id: string; email: string; tier: string;
+  signer_email: string | null; request_id: string | null;
+  slotInfo: { slot: number; label: string; totalSlots: number } | null;
+}
+
+export interface AdminRequest {
+  id: string; documentName: string; status: string; createdAt: string;
+  totalSlots: number; signedSlots: number; totalPlacements: number;
+  ownerId: string; ownerEmail: string; ownerTier: string;
+  slots: { slot: number; label: string; email: string; signed_at: string | null }[];
 }
 
 export interface AuthResponse {
@@ -82,6 +92,7 @@ export const api = {
       totalUsers: number; totalSignatures: number; totalDocuments: number;
       signaturesThisWeek: number;
       tierBreakdown: { tier: string; count: number }[];
+      totalRequests: number; totalSlotsCompleted: number; totalPlacementsApplied: number;
     }>('/api/admin/stats'),
 
     users: (params?: { search?: string; tier?: string; page?: number; limit?: number }) => {
@@ -105,8 +116,16 @@ export const api = {
     deleteUser: (id: string) =>
       request<{ success: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' }),
 
-    activity: (limit = 50) =>
+    activity: (limit = 100) =>
       request<{ activity: AdminActivity[] }>(`/api/admin/activity?limit=${limit}`),
+
+    requests: (params?: { search?: string; status?: string; limit?: number }) => {
+      const q = new URLSearchParams();
+      if (params?.search) q.set('search', params.search);
+      if (params?.status) q.set('status', params.status);
+      if (params?.limit)  q.set('limit',  String(params.limit));
+      return request<{ requests: AdminRequest[] }>(`/api/admin/requests?${q}`);
+    },
   },
   requests: {
     create: (body: {
