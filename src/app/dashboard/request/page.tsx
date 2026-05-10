@@ -8,40 +8,53 @@ import AuthGuard from '@/components/AuthGuard';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Step = 'document' | 'mark' | 'recipient' | 'share';
+type Step = 'document' | 'mark' | 'recipients' | 'done';
 
 interface Placement {
   x: number; y: number; w: number; h: number;
-  page: number; pageW: number; pageH: number;
+  page: number; pageW: number; pageH: number; slot: number;
 }
+
+interface Signer { slot: number; label: string; email: string }
 
 interface DocInfo {
   file: File;
-  dataUrl: string;   // base64 of the document (PDF or image)
+  dataUrl: string;
   pageImages: { dataUrl: string; natW: number; natH: number }[];
   type: 'pdf' | 'image';
 }
 
+// ─── Slot colors (up to 6 signers) ───────────────────────────────────────────
+
+const SLOT_COLORS = [
+  { border: 'border-purple-400', bg: 'bg-purple-400/15', text: 'text-purple-400', solid: 'bg-purple-400', tab: 'bg-purple-400 text-white', tabOff: 'border-purple-400/50 text-purple-400' },
+  { border: 'border-blue-400',   bg: 'bg-blue-400/15',   text: 'text-blue-400',   solid: 'bg-blue-400',   tab: 'bg-blue-400 text-white',   tabOff: 'border-blue-400/50 text-blue-400' },
+  { border: 'border-green-400',  bg: 'bg-green-400/15',  text: 'text-green-400',  solid: 'bg-green-400',  tab: 'bg-green-400 text-white',  tabOff: 'border-green-400/50 text-green-400' },
+  { border: 'border-orange-400', bg: 'bg-orange-400/15', text: 'text-orange-400', solid: 'bg-orange-400', tab: 'bg-orange-400 text-white', tabOff: 'border-orange-400/50 text-orange-400' },
+  { border: 'border-pink-400',   bg: 'bg-pink-400/15',   text: 'text-pink-400',   solid: 'bg-pink-400',   tab: 'bg-pink-400 text-white',   tabOff: 'border-pink-400/50 text-pink-400' },
+  { border: 'border-teal-400',   bg: 'bg-teal-400/15',   text: 'text-teal-400',   solid: 'bg-teal-400',   tab: 'bg-teal-400 text-white',   tabOff: 'border-teal-400/50 text-teal-400' },
+];
+
+function slotColor(slot: number) { return SLOT_COLORS[(slot - 1) % SLOT_COLORS.length]; }
+
 // ─── Step bar ─────────────────────────────────────────────────────────────────
 
-const STEPS = ['Document', 'Mark Spots', 'Recipient', 'Share Link'];
+const STEP_LABELS = ['Document', 'Mark Spots', 'Recipients', 'Done'];
+const STEP_IDX: Record<Step, number> = { document: 0, mark: 1, recipients: 2, done: 3 };
 
-function StepBar({ current }: { current: number }) {
+function StepBar({ current }: { current: Step }) {
+  const idx = STEP_IDX[current];
   return (
     <div className="flex items-center gap-0 mb-8">
-      {STEPS.map((label, i) => (
+      {STEP_LABELS.map((label, i) => (
         <div key={label} className="flex items-center flex-1 last:flex-none">
-          <div className={`flex items-center gap-2 ${i <= current ? 'text-accent' : 'text-text3'}`}>
+          <div className={`flex items-center gap-2 ${i <= idx ? 'text-accent' : 'text-text3'}`}>
             <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold border-2 ${
-              i < current  ? 'bg-accent border-accent text-white' :
-              i === current ? 'border-accent text-accent' :
-                              'border-border text-text3'
+              i < idx ? 'bg-accent border-accent text-white' : i === idx ? 'border-accent text-accent' : 'border-border text-text3'
             }`}>{i + 1}</div>
             <span className="text-xs font-medium hidden sm:block">{label}</span>
           </div>
-          {i < STEPS.length - 1 && (
-            <div className={`flex-1 h-px mx-2 ${i < current ? 'bg-accent' : 'bg-border'}`} />
-          )}
+          {i < STEP_LABELS.length - 1 && <div className={`flex-1 h-px mx-2 ${i < idx ? 'bg-accent' : 'bg-border'}`} />}
         </div>
       ))}
     </div>
@@ -50,19 +63,18 @@ function StepBar({ current }: { current: number }) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-async function renderAllPages(file: File): Promise<{ dataUrl: string; natW: number; natH: number }[]> {
+async function renderAllPages(file: File) {
   const pdfjsLib = await import('pdfjs-dist');
   pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
   const pages: { dataUrl: string; natW: number; natH: number }[] = [];
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
     const vp = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement('canvas');
     canvas.width = vp.width; canvas.height = vp.height;
-    const ctx = canvas.getContext('2d')!;
-    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    await page.render({ canvasContext: canvas.getContext('2d')!, viewport: vp }).promise;
     pages.push({ dataUrl: canvas.toDataURL('image/png'), natW: vp.width, natH: vp.height });
   }
   return pages;
@@ -70,10 +82,10 @@ async function renderAllPages(file: File): Promise<{ dataUrl: string; natW: numb
 
 async function fileToBase64(file: File): Promise<string> {
   return new Promise((res, rej) => {
-    const reader = new FileReader();
-    reader.onload = () => res(reader.result as string);
-    reader.onerror = rej;
-    reader.readAsDataURL(file);
+    const r = new FileReader();
+    r.onload = () => res(r.result as string);
+    r.onerror = rej;
+    r.readAsDataURL(file);
   });
 }
 
@@ -89,20 +101,16 @@ function DocStep({ onNext }: { onNext: (doc: DocInfo) => void }) {
     if (!file) return;
     setLoading(true); setError('');
     try {
-      const isPdf = file.type === 'application/pdf';
       const dataUrl = await fileToBase64(file);
-      if (isPdf) {
-        const pageImages = await renderAllPages(file);
-        setDoc({ file, dataUrl, pageImages, type: 'pdf' });
-      } else {
-        const img = await new Promise<HTMLImageElement>(res => {
-          const i = new Image(); i.onload = () => res(i); i.src = dataUrl;
-        });
-        setDoc({ file, dataUrl, pageImages: [{ dataUrl, natW: img.naturalWidth, natH: img.naturalHeight }], type: 'image' });
-      }
-    } catch (err) {
-      setError(`Failed to load file: ${err instanceof Error ? err.message : String(err)}`);
-    }
+      const isPdf   = file.type === 'application/pdf';
+      const pageImages = isPdf
+        ? await renderAllPages(file)
+        : await (async () => {
+            const img = await new Promise<HTMLImageElement>(res => { const i = new Image(); i.onload = () => res(i); i.src = dataUrl; });
+            return [{ dataUrl, natW: img.naturalWidth, natH: img.naturalHeight }];
+          })();
+      setDoc({ file, dataUrl, pageImages, type: isPdf ? 'pdf' : 'image' });
+    } catch (err) { setError(`Failed to load: ${err instanceof Error ? err.message : String(err)}`); }
     setLoading(false);
   }
 
@@ -111,7 +119,7 @@ function DocStep({ onNext }: { onNext: (doc: DocInfo) => void }) {
   return (
     <div>
       <h2 className="text-xl font-bold text-text1 mb-1">Upload document</h2>
-      <p className="text-text2 text-sm mb-6">Upload the document you want someone else to sign</p>
+      <p className="text-text2 text-sm mb-6">Upload the document that multiple people need to sign</p>
 
       <label className="block cursor-pointer">
         <input type="file" accept=".pdf,image/*" onChange={handleFile} className="hidden" />
@@ -134,7 +142,6 @@ function DocStep({ onNext }: { onNext: (doc: DocInfo) => void }) {
       </label>
 
       {error && <p className="mt-3 text-sm text-danger">{error}</p>}
-
       {doc && !loading && (
         <div className="mt-4 card p-4 flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-purple-400/10 flex items-center justify-center shrink-0">
@@ -147,116 +154,159 @@ function DocStep({ onNext }: { onNext: (doc: DocInfo) => void }) {
           <svg className="w-5 h-5 text-success shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
         </div>
       )}
-
-      <button onClick={() => doc && onNext(doc)} disabled={!doc || loading} className="btn-primary mt-6 w-full">
-        Next: Mark Sign Spots →
+      <button onClick={() => doc && onNext(doc)} disabled={!doc || loading} className="btn-primary mt-6 w-full disabled:opacity-50">
+        Next: Mark Signature Spots →
       </button>
     </div>
   );
 }
 
-// ─── Step 2: Mark Spots ───────────────────────────────────────────────────────
+// ─── Step 2: Mark spots with signer assignment ────────────────────────────────
 
-function MarkStep({
-  doc, onNext, onBack,
-}: { doc: DocInfo; onNext: (placements: Placement[]) => void; onBack: () => void }) {
+function MarkStep({ doc, onNext, onBack }: {
+  doc: DocInfo;
+  onNext: (placements: Placement[], signers: Signer[]) => void;
+  onBack: () => void;
+}) {
+  const [signers,     setSigners]     = useState<Signer[]>([{ slot: 1, label: 'Person 1', email: '' }]);
+  const [activeSlot,  setActiveSlot]  = useState(1);
   const [currentPage, setCurrentPage] = useState(0);
   const [placements,  setPlacements]  = useState<Placement[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  // Track which placement is being dragged/resized
-  const dragRef   = useRef<{ idx: number; ox: number; oy: number } | null>(null);
-  const resizeRef = useRef<{ idx: number; startX: number; startY: number; initW: number; initH: number } | null>(null);
+  const dragRef      = useRef<{ idx: number; ox: number; oy: number } | null>(null);
+  const resizeRef    = useRef<{ idx: number; sx: number; sy: number; iw: number; ih: number } | null>(null);
 
   const page = doc.pageImages[currentPage];
-  const pagePlacements = placements.filter(p => p.page === currentPage);
 
-  function clampPlacement(p: Placement): Placement {
+  function clampP(p: Placement): Placement {
     const el = containerRef.current;
     if (!el) return p;
-    const { offsetWidth: cw, offsetHeight: ch } = el;
     return {
       ...p,
-      x: Math.max(0, Math.min(p.x, cw - p.w)),
-      y: Math.max(0, Math.min(p.y, ch - p.h)),
-      w: Math.max(60, Math.min(p.w, cw)),
-      h: Math.max(24, Math.min(p.h, ch)),
+      x: Math.max(0, Math.min(p.x, el.offsetWidth - p.w)),
+      y: Math.max(0, Math.min(p.y, el.offsetHeight - p.h)),
+      w: Math.max(60, Math.min(p.w, el.offsetWidth)),
+      h: Math.max(24, Math.min(p.h, el.offsetHeight)),
     };
   }
 
   function addPlacement() {
     const el = containerRef.current;
-    const cw = el?.offsetWidth ?? 400;
-    const ch = el?.offsetHeight ?? 400;
-    const newP: Placement = {
+    const cw = el?.offsetWidth ?? 400; const ch = el?.offsetHeight ?? 400;
+    setPlacements(prev => [...prev, {
       x: Math.max(0, cw / 2 - 80), y: Math.max(0, ch / 2 - 30),
       w: 160, h: 60,
-      page: currentPage,
-      pageW: page.natW, pageH: page.natH,
-    };
-    setPlacements(prev => [...prev, newP]);
+      page: currentPage, pageW: page.natW, pageH: page.natH,
+      slot: activeSlot,
+    }]);
   }
 
-  function removePlacement(idx: number) {
-    // idx is global index in placements array
-    setPlacements(prev => prev.filter((_, i) => i !== idx));
+  function addSigner() {
+    if (signers.length >= 6) return;
+    const slot = signers.length + 1;
+    setSigners(prev => [...prev, { slot, label: `Person ${slot}`, email: '' }]);
+    setActiveSlot(slot);
   }
 
-  function startDrag(e: React.MouseEvent, globalIdx: number) {
+  function removeSigner(slot: number) {
+    if (signers.length <= 1) return;
+    setSigners(prev => prev.filter(s => s.slot !== slot));
+    setPlacements(prev => prev.filter(p => p.slot !== slot));
+    setActiveSlot(signers.find(s => s.slot !== slot)?.slot ?? 1);
+  }
+
+  function updateSignerLabel(slot: number, label: string) {
+    setSigners(prev => prev.map(s => s.slot === slot ? { ...s, label } : s));
+  }
+
+  function startDrag(e: React.MouseEvent, idx: number) {
     e.preventDefault();
-    const p = placements[globalIdx];
-    dragRef.current = { idx: globalIdx, ox: e.clientX - p.x, oy: e.clientY - p.y };
-    function move(ev: MouseEvent) {
+    const p = placements[idx];
+    dragRef.current = { idx, ox: e.clientX - p.x, oy: e.clientY - p.y };
+    const move = (ev: MouseEvent) => {
       if (!dragRef.current) return;
-      const { idx, ox, oy } = dragRef.current;
-      setPlacements(prev => prev.map((item, i) =>
-        i === idx ? clampPlacement({ ...item, x: ev.clientX - ox, y: ev.clientY - oy }) : item
-      ));
-    }
-    function up() { dragRef.current = null; window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); }
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
+      const { idx: i, ox, oy } = dragRef.current;
+      setPlacements(prev => prev.map((item, ii) => ii === i ? clampP({ ...item, x: ev.clientX - ox, y: ev.clientY - oy }) : item));
+    };
+    const up = () => { dragRef.current = null; window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
   }
 
-  function startResize(e: React.MouseEvent, globalIdx: number) {
+  function startResize(e: React.MouseEvent, idx: number) {
     e.preventDefault(); e.stopPropagation();
-    const p = placements[globalIdx];
-    resizeRef.current = { idx: globalIdx, startX: e.clientX, startY: e.clientY, initW: p.w, initH: p.h };
-    function move(ev: MouseEvent) {
+    const p = placements[idx];
+    resizeRef.current = { idx, sx: e.clientX, sy: e.clientY, iw: p.w, ih: p.h };
+    const move = (ev: MouseEvent) => {
       if (!resizeRef.current) return;
-      const { idx, startX, startY, initW, initH } = resizeRef.current;
-      setPlacements(prev => prev.map((item, i) =>
-        i === idx ? clampPlacement({ ...item, w: Math.max(60, initW + ev.clientX - startX), h: Math.max(24, initH + ev.clientY - startY) }) : item
-      ));
-    }
-    function up() { resizeRef.current = null; window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); }
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
+      const { idx: i, sx, sy, iw, ih } = resizeRef.current;
+      setPlacements(prev => prev.map((item, ii) => ii === i ? clampP({ ...item, w: Math.max(60, iw + ev.clientX - sx), h: Math.max(24, ih + ev.clientY - sy) }) : item));
+    };
+    const up = () => { resizeRef.current = null; window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
   }
 
-  // Scale placements relative to natural page size for storage
   function scaledPlacements(): Placement[] {
     const el = containerRef.current;
     if (!el) return placements;
-    const displayW = el.offsetWidth;
+    const dw = el.offsetWidth;
     return placements.map(p => {
-      const pageImg = doc.pageImages[p.page];
-      const scale = pageImg.natW / displayW;
-      return {
-        ...p,
-        x: p.x * scale, y: p.y * scale,
-        w: p.w * scale, h: p.h * scale,
-        pageW: pageImg.natW, pageH: pageImg.natH,
-      };
+      const pg = doc.pageImages[p.page];
+      const sc = pg.natW / dw;
+      return { ...p, x: p.x * sc, y: p.y * sc, w: p.w * sc, h: p.h * sc, pageW: pg.natW, pageH: pg.natH };
     });
   }
+
+  const pagePlacements = placements.filter(p => p.page === currentPage);
 
   return (
     <div>
       <h2 className="text-xl font-bold text-text1 mb-1">Mark signature spots</h2>
-      <p className="text-text2 text-sm mb-4">
-        Add spots where the recipient should sign. You can add multiple spots per page.
-      </p>
+      <p className="text-text2 text-sm mb-4">Add signers, then mark where each person should sign. Signers will be notified in order.</p>
+
+      {/* Signer tabs */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        {signers.map(s => {
+          const c = slotColor(s.slot);
+          const active = s.slot === activeSlot;
+          return (
+            <button key={s.slot} onClick={() => setActiveSlot(s.slot)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${
+                active ? c.tab : `bg-surface border ${c.tabOff}`
+              }`}>
+              <span className={`w-2 h-2 rounded-full ${active ? 'bg-white' : c.solid}`} />
+              {s.label}
+              {placements.filter(p => p.slot === s.slot).length > 0 && (
+                <span className={`ml-0.5 ${active ? 'opacity-80' : ''}`}>
+                  ({placements.filter(p => p.slot === s.slot).length})
+                </span>
+              )}
+              {signers.length > 1 && (
+                <span
+                  onClick={e => { e.stopPropagation(); removeSigner(s.slot); }}
+                  className="ml-0.5 hover:opacity-60 cursor-pointer"
+                >×</span>
+              )}
+            </button>
+          );
+        })}
+        {signers.length < 6 && (
+          <button onClick={addSigner}
+            className="px-3 py-1.5 rounded-full text-xs font-bold border border-dashed border-border text-text3 hover:border-accent hover:text-accent transition-colors">
+            + Add signer
+          </button>
+        )}
+      </div>
+
+      {/* Edit active signer label */}
+      <div className="flex items-center gap-2 mb-4">
+        <label className="text-xs text-text3 shrink-0">Label for selected signer:</label>
+        <input
+          value={signers.find(s => s.slot === activeSlot)?.label ?? ''}
+          onChange={e => updateSignerLabel(activeSlot, e.target.value)}
+          className="flex-1 bg-surface2 border border-border rounded-lg px-3 py-1.5 text-xs text-text1 focus:outline-none focus:border-accent transition-colors"
+          placeholder="e.g. CEO, Client, Witness…"
+        />
+      </div>
 
       {/* Page tabs */}
       {doc.pageImages.length > 1 && (
@@ -275,174 +325,213 @@ function MarkStep({
         </div>
       )}
 
-      <div
-        ref={containerRef}
-        className="relative rounded-xl overflow-hidden border border-border mb-4 select-none"
-        style={{ background: '#f5f5f5' }}
-      >
+      {/* Document with overlaid spots */}
+      <div ref={containerRef} className="relative rounded-xl overflow-hidden border border-border mb-4 select-none" style={{ background: '#f5f5f5' }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={page.dataUrl} alt={`Page ${currentPage + 1}`} className="w-full block" draggable={false} />
 
-        {pagePlacements.map((p) => {
+        {pagePlacements.map(p => {
           const globalIdx = placements.indexOf(p);
+          const c = slotColor(p.slot);
+          const signer = signers.find(s => s.slot === p.slot);
+          const isActive = p.slot === activeSlot;
           return (
             <div
               key={globalIdx}
               onMouseDown={e => startDrag(e, globalIdx)}
-              style={{ left: p.x, top: p.y, width: p.w, height: p.h }}
-              className="absolute border-2 border-purple-400 rounded cursor-move bg-purple-400/10"
+              style={{ left: p.x, top: p.y, width: p.w, height: p.h, opacity: isActive ? 1 : 0.5 }}
+              className={`absolute border-2 rounded cursor-move ${c.border} ${c.bg}`}
             >
               <div className="w-full h-full flex items-center justify-center pointer-events-none">
-                <span className="text-purple-400 text-xs font-semibold opacity-60">Sign here</span>
+                <span className={`text-[10px] font-bold ${c.text}`}>{signer?.label ?? `P${p.slot}`}</span>
               </div>
               <button
-                onMouseDown={e => { e.stopPropagation(); removePlacement(globalIdx); }}
-                className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-danger text-white text-xs flex items-center justify-center hover:opacity-80 transition-opacity z-10 pointer-events-auto"
-              >
-                ×
-              </button>
-              <div onMouseDown={e => startResize(e, globalIdx)} className="absolute bottom-0 right-0 w-4 h-4 bg-purple-400 rounded-tl cursor-se-resize" />
+                onMouseDown={e => { e.stopPropagation(); setPlacements(prev => prev.filter((_, i) => i !== globalIdx)); }}
+                className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-danger text-white text-xs flex items-center justify-center z-10 pointer-events-auto hover:opacity-80"
+              >×</button>
+              <div onMouseDown={e => startResize(e, globalIdx)} className={`absolute bottom-0 right-0 w-4 h-4 ${c.solid} rounded-tl cursor-se-resize`} />
             </div>
           );
         })}
       </div>
 
-      <button onClick={addPlacement}
-        className="w-full py-2.5 rounded-xl border-2 border-dashed border-purple-400/50 text-purple-400 text-sm font-semibold hover:border-purple-400 transition-colors mb-6">
-        + Add signature spot on this page
-      </button>
+      {/* Add spot button */}
+      {(() => { const c = slotColor(activeSlot); const signer = signers.find(s => s.slot === activeSlot);
+        return (
+          <button onClick={addPlacement}
+            className={`w-full py-2.5 rounded-xl border-2 border-dashed text-sm font-semibold hover:opacity-80 transition-opacity mb-4 ${c.border} ${c.text}`}>
+            + Add spot for {signer?.label ?? `Person ${activeSlot}`} on this page
+          </button>
+        );
+      })()}
 
-      <div className="flex items-center gap-3 mb-4">
-        <div className="flex-1 text-sm text-text2">
-          {placements.length === 0
-            ? 'No spots added yet'
-            : `${placements.length} spot${placements.length !== 1 ? 's' : ''} across ${new Set(placements.map(p => p.page)).size} page${new Set(placements.map(p => p.page)).size !== 1 ? 's' : ''}`}
+      {/* Summary */}
+      <div className="card p-4 mb-6">
+        <p className="text-xs font-semibold text-text3 uppercase tracking-wider mb-2">Signing order summary</p>
+        <div className="space-y-2">
+          {signers.map((s, i) => {
+            const c = slotColor(s.slot);
+            const count = placements.filter(p => p.slot === s.slot).length;
+            return (
+              <div key={s.slot} className="flex items-center gap-3">
+                <span className="text-xs text-text3 w-4">{i + 1}.</span>
+                <span className={`w-2 h-2 rounded-full shrink-0 ${c.solid}`} />
+                <span className="text-sm text-text1 flex-1">{s.label}</span>
+                <span className="text-xs text-text3">{count} spot{count !== 1 ? 's' : ''}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
       <div className="flex gap-3">
-        <button onClick={onBack} className="flex-1 py-3 rounded-xl border border-border text-text2 text-sm hover:border-accent hover:text-text1 transition-colors">
-          ← Back
-        </button>
-        <button onClick={() => onNext(scaledPlacements())} disabled={placements.length === 0}
+        <button onClick={onBack} className="flex-1 py-3 rounded-xl border border-border text-text2 text-sm hover:border-accent hover:text-text1 transition-colors">← Back</button>
+        <button onClick={() => placements.length > 0 && onNext(scaledPlacements(), signers)} disabled={placements.length === 0}
           className="flex-[2] btn-primary disabled:opacity-50">
-          Next: Recipient Info →
+          Next: Assign Emails →
         </button>
       </div>
     </div>
   );
 }
 
-// ─── Step 3: Recipient ────────────────────────────────────────────────────────
+// ─── Step 3: Recipients ───────────────────────────────────────────────────────
 
-function RecipientStep({
-  doc, placements, onNext, onBack,
-}: { doc: DocInfo; placements: Placement[]; onNext: (token: string) => void; onBack: () => void }) {
-  const [email,   setEmail]   = useState('');
-  const [message, setMessage] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState('');
+function RecipientsStep({ doc, placements, signers: initialSigners, onDone, onBack }: {
+  doc: DocInfo;
+  placements: Placement[];
+  signers: Signer[];
+  onDone: (requestId: string) => void;
+  onBack: () => void;
+}) {
+  const [signers,  setSigners]  = useState<Signer[]>(initialSigners);
+  const [message,  setMessage]  = useState('');
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState('');
+
+  function updateEmail(slot: number, email: string) {
+    setSigners(prev => prev.map(s => s.slot === slot ? { ...s, email } : s));
+  }
 
   async function handleSubmit() {
-    if (!email.trim()) { setError('Recipient email is required'); return; }
+    for (const s of signers) {
+      if (!s.email.trim() || !s.email.includes('@')) {
+        setError(`Please enter a valid email for ${s.label}`); return;
+      }
+    }
     setLoading(true); setError('');
     try {
       const res = await api.requests.create({
         documentName: doc.file.name,
         documentData: doc.dataUrl,
         documentType: doc.type,
-        recipientEmail: email.trim(),
         message: message.trim() || undefined,
         placements,
+        signers: signers.map(s => ({ slot: s.slot, email: s.email.trim(), label: s.label })),
       });
-      onNext(res.token);
+      onDone(res.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create signing request');
+      setError(err instanceof Error ? err.message : 'Failed to create request');
     }
     setLoading(false);
   }
 
   return (
     <div>
-      <h2 className="text-xl font-bold text-text1 mb-1">Recipient details</h2>
-      <p className="text-text2 text-sm mb-6">Who needs to sign this document?</p>
+      <h2 className="text-xl font-bold text-text1 mb-1">Assign recipients</h2>
+      <p className="text-text2 text-sm mb-6">Enter the email for each signer. They will be notified in the order listed below.</p>
 
-      <div className="space-y-4 mb-6">
-        <div>
-          <label className="block text-xs font-semibold text-text2 mb-1.5">Recipient email *</label>
-          <input
-            type="email" value={email} onChange={e => setEmail(e.target.value)}
-            placeholder="signer@example.com"
-            className="w-full bg-surface2 border border-border rounded-xl px-4 py-3 text-sm text-text1 placeholder-text3 focus:outline-none focus:border-accent transition-colors"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-semibold text-text2 mb-1.5">Message (optional)</label>
-          <textarea
-            value={message} onChange={e => setMessage(e.target.value)}
-            placeholder="Please sign this document…"
-            rows={3}
-            className="w-full bg-surface2 border border-border rounded-xl px-4 py-3 text-sm text-text1 placeholder-text3 focus:outline-none focus:border-accent transition-colors resize-none"
-          />
-        </div>
+      <div className="space-y-3 mb-4">
+        {signers.map((s, i) => {
+          const c = slotColor(s.slot);
+          const spotCount = placements.filter(p => p.slot === s.slot).length;
+          return (
+            <div key={s.slot} className={`card p-4 border ${c.border}`}>
+              <div className="flex items-center gap-3 mb-2">
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white ${c.solid}`}>{i + 1}</div>
+                <span className="text-sm font-semibold text-text1">{s.label}</span>
+                <span className="text-xs text-text3 ml-auto">{spotCount} spot{spotCount !== 1 ? 's' : ''}</span>
+              </div>
+              <input
+                type="email"
+                value={s.email}
+                onChange={e => updateEmail(s.slot, e.target.value)}
+                placeholder={`${s.label.toLowerCase().replace(/\s/g, '.')}@example.com`}
+                className="w-full bg-surface2 border border-border rounded-xl px-3 py-2.5 text-sm text-text1 placeholder-text3 focus:outline-none focus:border-accent transition-colors"
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mb-6">
+        <label className="block text-xs font-semibold text-text2 mb-1.5">Message (optional)</label>
+        <textarea
+          value={message} onChange={e => setMessage(e.target.value)}
+          placeholder="Please review and sign this document…"
+          rows={3}
+          className="w-full bg-surface2 border border-border rounded-xl px-4 py-3 text-sm text-text1 placeholder-text3 focus:outline-none focus:border-accent transition-colors resize-none"
+        />
+      </div>
+
+      <div className="card p-4 mb-6 border-accent/20 bg-accent/5">
+        <p className="text-xs text-text2">
+          <span className="font-semibold text-accent">How it works:</span> An email will be sent to{' '}
+          <strong>{signers[0]?.label}</strong> first. After they sign, the next person is automatically notified, and so on.
+          Once all {signers.length} people have signed, you will receive a notification to download the completed document.
+        </p>
       </div>
 
       {error && <p className="mb-4 text-sm text-danger bg-danger/10 border border-danger/20 rounded-xl px-4 py-3">{error}</p>}
 
       <div className="flex gap-3">
-        <button onClick={onBack} className="flex-1 py-3 rounded-xl border border-border text-text2 text-sm hover:border-accent hover:text-text1 transition-colors">
-          ← Back
-        </button>
-        <button onClick={handleSubmit} disabled={loading}
-          className="flex-[2] btn-primary disabled:opacity-50">
-          {loading ? 'Creating link…' : 'Create Signing Link →'}
+        <button onClick={onBack} className="flex-1 py-3 rounded-xl border border-border text-text2 text-sm hover:border-accent hover:text-text1 transition-colors">← Back</button>
+        <button onClick={handleSubmit} disabled={loading} className="flex-[2] btn-primary disabled:opacity-50">
+          {loading ? 'Sending…' : `Send to ${signers[0]?.label} →`}
         </button>
       </div>
     </div>
   );
 }
 
-// ─── Step 4: Share Link ────────────────────────────────────────────────────────
+// ─── Step 4: Done ─────────────────────────────────────────────────────────────
 
-function ShareStep({ token }: { token: string }) {
-  const BASE = process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '');
-  const url  = `${BASE}/sign/${token}`;
-  const [copied, setCopied] = useState(false);
-
-  function copy() {
-    navigator.clipboard.writeText(url).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
+function DoneStep({ requestId, signers }: { requestId: string; signers: Signer[] }) {
   return (
     <div>
       <div className="card p-8 text-center mb-6">
         <div className="w-16 h-16 rounded-full bg-success/10 border-2 border-success/30 flex items-center justify-center mx-auto mb-4">
           <svg className="w-8 h-8 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
         </div>
-        <h2 className="text-xl font-bold text-text1 mb-1">Signing link created!</h2>
-        <p className="text-text2 text-sm">Share this link with your recipient so they can sign the document.</p>
+        <h2 className="text-xl font-bold text-text1 mb-2">Signing request sent!</h2>
+        <p className="text-text2 text-sm">An email has been sent to <strong>{signers[0]?.label}</strong>. The next person will be notified automatically after each signature.</p>
       </div>
 
-      <div className="card p-4 mb-4">
-        <p className="text-xs font-semibold text-text3 uppercase tracking-wider mb-2">Signing link</p>
-        <div className="flex items-center gap-2">
-          <p className="flex-1 text-sm text-accent2 font-mono break-all">{url}</p>
-          <button onClick={copy}
-            className="shrink-0 px-3 py-2 rounded-lg border border-border text-xs font-semibold text-text2 hover:border-accent hover:text-text1 transition-colors">
-            {copied ? 'Copied!' : 'Copy'}
-          </button>
+      <div className="card p-5 mb-5">
+        <p className="text-xs font-semibold text-text3 uppercase tracking-wider mb-3">Signing order</p>
+        <div className="space-y-2.5">
+          {signers.map((s, i) => {
+            const c = slotColor(s.slot);
+            return (
+              <div key={s.slot} className="flex items-center gap-3">
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0 ${c.solid}`}>{i + 1}</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-text1">{s.label}</p>
+                  <p className="text-xs text-text3 truncate">{s.email}</p>
+                </div>
+                {i === 0 && <span className="text-xs font-semibold text-accent bg-accent/10 border border-accent/30 px-2 py-0.5 rounded-full">Notified</span>}
+                {i > 0 && <span className="text-xs text-text3">Waiting</span>}
+              </div>
+            );
+          })}
         </div>
       </div>
 
       <div className="space-y-3">
-        <a href={`mailto:?subject=Please%20sign%20this%20document&body=Hi%2C%20please%20sign%20this%20document%3A%20${encodeURIComponent(url)}`}
+        <Link href={`/dashboard/requests/${requestId}`}
           className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-border text-text2 text-sm font-semibold hover:border-accent hover:text-text1 transition-colors">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-          Open in email
-        </a>
+          Track signing progress
+        </Link>
         <Link href="/dashboard" className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-colors">
           Back to dashboard
         </Link>
@@ -458,9 +547,8 @@ function RequestContent() {
   const [step,       setStep]       = useState<Step>('document');
   const [doc,        setDoc]        = useState<DocInfo | null>(null);
   const [placements, setPlacements] = useState<Placement[]>([]);
-  const [token,      setToken]      = useState('');
-
-  const stepIdx: Record<Step, number> = { document: 0, mark: 1, recipient: 2, share: 3 };
+  const [signers,    setSigners]    = useState<Signer[]>([]);
+  const [requestId,  setRequestId]  = useState('');
 
   return (
     <div className="min-h-screen">
@@ -470,11 +558,9 @@ function RequestContent() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
           </Link>
           <div className="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center">
-            <svg className="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-            </svg>
+            <svg className="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
           </div>
-          <span className="text-base font-bold text-text1 flex-1">Request Signature</span>
+          <span className="text-base font-bold text-text1 flex-1">Request Signatures</span>
           {user && (
             <Link href="/profile">
               <div className="w-9 h-9 rounded-full bg-gradient-to-br from-accent to-purple-700 flex items-center justify-center text-white text-sm font-bold cursor-pointer hover:opacity-80 transition-opacity">
@@ -486,18 +572,16 @@ function RequestContent() {
       </div>
 
       <div className="max-w-2xl mx-auto px-6 py-8">
-        <StepBar current={stepIdx[step]} />
-
-        {step === 'document' && (
-          <DocStep onNext={d => { setDoc(d); setStep('mark'); }} />
-        )}
+        <StepBar current={step} />
+        {step === 'document' && <DocStep onNext={d => { setDoc(d); setStep('mark'); }} />}
         {step === 'mark' && doc && (
-          <MarkStep doc={doc} onNext={p => { setPlacements(p); setStep('recipient'); }} onBack={() => setStep('document')} />
+          <MarkStep doc={doc} onNext={(p, s) => { setPlacements(p); setSigners(s); setStep('recipients'); }} onBack={() => setStep('document')} />
         )}
-        {step === 'recipient' && doc && (
-          <RecipientStep doc={doc} placements={placements} onNext={t => { setToken(t); setStep('share'); }} onBack={() => setStep('mark')} />
+        {step === 'recipients' && doc && (
+          <RecipientsStep doc={doc} placements={placements} signers={signers}
+            onDone={id => { setRequestId(id); setStep('done'); }} onBack={() => setStep('mark')} />
         )}
-        {step === 'share' && <ShareStep token={token} />}
+        {step === 'done' && <DoneStep requestId={requestId} signers={signers} />}
       </div>
     </div>
   );

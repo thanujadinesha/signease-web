@@ -3,34 +3,45 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
-import { PDFDocument } from 'pdf-lib';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type SigMode = 'draw' | 'type';
-type Status = 'loading' | 'ready' | 'signing' | 'done' | 'error' | 'already_signed';
+type PageStatus = 'loading' | 'ready' | 'signing' | 'done' | 'already_signed' | 'not_your_turn' | 'all_complete' | 'error';
 
-interface Placement {
-  x: number; y: number; w: number; h: number;
-  page: number; pageW: number; pageH: number;
-}
+interface Placement { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number }
+interface CompletedSlot { slot: number; label: string; signatureData: string; signedAt: string; placements: Placement[] }
 
-interface RequestData {
-  id: string;
+interface SignerData {
+  requestId: string;
   documentName: string;
   documentData: string;
   documentType: string;
-  recipientEmail: string | null;
   message: string | null;
-  placements: Placement[];
+  mySlot: number;
+  myLabel: string;
+  myPlacements: Placement[];
+  futurePlacements: (Placement & { slot: number })[];
+  completedSlots: CompletedSlot[];
+  totalSlots: number;
 }
+
+// ─── Slot colors ──────────────────────────────────────────────────────────────
+
+const SLOT_COLORS = [
+  'border-purple-400 bg-purple-400/10 text-purple-400',
+  'border-blue-400 bg-blue-400/10 text-blue-400',
+  'border-green-400 bg-green-400/10 text-green-400',
+  'border-orange-400 bg-orange-400/10 text-orange-400',
+  'border-pink-400 bg-pink-400/10 text-pink-400',
+  'border-teal-400 bg-teal-400/10 text-teal-400',
+];
+function slotColorClass(slot: number) { return SLOT_COLORS[(slot - 1) % SLOT_COLORS.length]; }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((res, rej) => {
-    const img = new Image(); img.onload = () => res(img); img.onerror = rej; img.src = src;
-  });
+  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
 }
 
 async function renderPdfAllPages(dataUrl: string): Promise<{ dataUrl: string; natW: number; natH: number }[]> {
@@ -47,16 +58,80 @@ async function renderPdfAllPages(dataUrl: string): Promise<{ dataUrl: string; na
     const vp = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement('canvas');
     canvas.width = vp.width; canvas.height = vp.height;
-    const ctx = canvas.getContext('2d')!;
-    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    await page.render({ canvasContext: canvas.getContext('2d')!, viewport: vp }).promise;
     pages.push({ dataUrl: canvas.toDataURL('image/png'), natW: vp.width, natH: vp.height });
   }
   return pages;
 }
 
+// ─── Document page with all slot overlays ─────────────────────────────────────
+
+function DocPageView({ pageImages, signerData, currentPage }: {
+  pageImages: { dataUrl: string; natW: number; natH: number }[];
+  signerData: SignerData;
+  currentPage: number;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [displayW, setDisplayW] = useState(0);
+  useEffect(() => {
+    if (!ref.current) return;
+    const obs = new ResizeObserver(e => setDisplayW(e[0].contentRect.width));
+    obs.observe(ref.current);
+    return () => obs.disconnect();
+  }, []);
+
+  const page = pageImages[currentPage];
+  const scale = displayW > 0 ? displayW / page.natW : 1;
+
+  const mySpots     = signerData.myPlacements.filter(p => p.page === currentPage);
+  const futureSpots = signerData.futurePlacements.filter(p => p.page === currentPage);
+
+  return (
+    <div ref={ref} className="relative rounded-xl overflow-hidden border border-border mb-4" style={{ background: '#f5f5f5' }}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={page.dataUrl} alt={`Page ${currentPage + 1}`} className="w-full block" draggable={false} />
+
+      {/* Completed slots: show their actual signatures */}
+      {signerData.completedSlots.map(slot =>
+        slot.placements.filter(p => p.page === currentPage).map((p, i) => (
+          <div key={`done-${slot.slot}-${i}`} style={{ left: p.x * scale, top: p.y * scale, width: p.w * scale, height: p.h * scale }} className="absolute">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={slot.signatureData} alt={slot.label} className="w-full h-full object-contain" />
+          </div>
+        ))
+      )}
+
+      {/* My spots: highlighted */}
+      {mySpots.map((p, i) => (
+        <div key={`mine-${i}`}
+          style={{ left: p.x * scale, top: p.y * scale, width: p.w * scale, height: p.h * scale }}
+          className="absolute border-2 border-accent rounded bg-accent/10 animate-pulse">
+          <div className="w-full h-full flex items-center justify-center">
+            <span className="text-accent text-[10px] font-bold">Your signature here</span>
+          </div>
+        </div>
+      ))}
+
+      {/* Future slots: dimmed */}
+      {futureSpots.map((p, i) => {
+        const cc = slotColorClass(p.slot);
+        return (
+          <div key={`future-${i}`}
+            style={{ left: p.x * scale, top: p.y * scale, width: p.w * scale, height: p.h * scale, opacity: 0.35 }}
+            className={`absolute border-2 rounded ${cc}`}>
+            <div className="w-full h-full flex items-center justify-center">
+              <span className="text-[10px] font-bold">Pending</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Signature pad ────────────────────────────────────────────────────────────
 
-function SignaturePad({ onCapture }: { onCapture: (dataUrl: string) => void }) {
+function SignaturePad({ onCapture, disabled }: { onCapture: (dataUrl: string) => void; disabled?: boolean }) {
   const [mode,      setMode]      = useState<SigMode>('draw');
   const [text,      setText]      = useState('');
   const [drawing,   setDrawing]   = useState(false);
@@ -66,15 +141,13 @@ function SignaturePad({ onCapture }: { onCapture: (dataUrl: string) => void }) {
   const currentRef = useRef<{ x: number; y: number }[]>([]);
 
   function getPos(e: React.MouseEvent | React.TouchEvent) {
-    const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
+    const rect = canvasRef.current!.getBoundingClientRect();
     const src = 'touches' in e ? e.touches[0] : e;
     return { x: src.clientX - rect.left, y: src.clientY - rect.top };
   }
 
   function redraw() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const canvas = canvasRef.current; if (!canvas) return;
     const ctx = canvas.getContext('2d')!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.strokeStyle = '#1A1033'; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -92,35 +165,26 @@ function SignaturePad({ onCapture }: { onCapture: (dataUrl: string) => void }) {
   function onMouseDown(e: React.MouseEvent) { e.preventDefault(); setDrawing(true); currentRef.current = [getPos(e)]; }
   function onMouseMove(e: React.MouseEvent) { if (!drawing) return; currentRef.current.push(getPos(e)); redraw(); }
   function onMouseUp() {
-    if (!drawing) return;
-    setDrawing(false);
-    strokesRef.current.push([...currentRef.current]);
-    currentRef.current = [];
+    if (!drawing) return; setDrawing(false);
+    strokesRef.current.push([...currentRef.current]); currentRef.current = [];
     setHasStrokes(strokesRef.current.length > 0);
   }
   function onTouchStart(e: React.TouchEvent) { e.preventDefault(); setDrawing(true); currentRef.current = [getPos(e)]; }
   function onTouchMove(e: React.TouchEvent)  { e.preventDefault(); if (!drawing) return; currentRef.current.push(getPos(e)); redraw(); }
   function onTouchEnd() { onMouseUp(); }
-
   function clearCanvas() {
     strokesRef.current = []; currentRef.current = []; setHasStrokes(false);
-    const ctx = canvasRef.current?.getContext('2d');
-    if (ctx) ctx.clearRect(0, 0, canvasRef.current!.width, canvasRef.current!.height);
+    canvasRef.current?.getContext('2d')?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
   }
 
   function capture() {
-    if (mode === 'draw') {
-      onCapture(canvasRef.current?.toDataURL('image/png') ?? '');
-    } else {
-      const c = document.createElement('canvas');
-      c.width = 400; c.height = 120;
-      const ctx = c.getContext('2d')!;
-      ctx.font = 'italic 52px Georgia, serif';
-      ctx.fillStyle = '#1A1033';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(text, 200, 60);
-      onCapture(c.toDataURL('image/png'));
-    }
+    if (mode === 'draw') { onCapture(canvasRef.current?.toDataURL('image/png') ?? ''); return; }
+    const c = document.createElement('canvas'); c.width = 400; c.height = 120;
+    const ctx = c.getContext('2d')!;
+    ctx.font = 'italic 52px Georgia, serif'; ctx.fillStyle = '#1A1033';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(text, 200, 60);
+    onCapture(c.toDataURL('image/png'));
   }
 
   const canProceed = mode === 'draw' ? hasStrokes : text.trim().length > 0;
@@ -129,8 +193,8 @@ function SignaturePad({ onCapture }: { onCapture: (dataUrl: string) => void }) {
     <div>
       <div className="flex gap-2 mb-4">
         {(['draw', 'type'] as SigMode[]).map(m => (
-          <button key={m} onClick={() => setMode(m)}
-            className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
+          <button key={m} onClick={() => setMode(m)} disabled={disabled}
+            className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-colors disabled:opacity-50 ${
               mode === m ? 'bg-accent text-white' : 'bg-surface border border-border text-text2 hover:border-accent'
             }`}>
             {m === 'draw' ? '✍️ Draw' : '⌨️ Type'}
@@ -140,79 +204,25 @@ function SignaturePad({ onCapture }: { onCapture: (dataUrl: string) => void }) {
 
       {mode === 'draw' ? (
         <div className="relative rounded-xl overflow-hidden border-2 border-dashed border-border mb-4" style={{ height: 180, background: '#FAFAFE' }}>
-          <canvas
-            ref={canvasRef} width={600} height={180}
-            className="absolute inset-0 w-full h-full cursor-crosshair"
-            style={{ touchAction: 'none' }}
+          <canvas ref={canvasRef} width={600} height={180} className="absolute inset-0 w-full h-full cursor-crosshair" style={{ touchAction: 'none' }}
             onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
-            onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
-          />
-          {!hasStrokes && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <p className="text-gray-400 text-sm">Draw your signature here</p>
-            </div>
-          )}
+            onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} />
+          {!hasStrokes && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><p className="text-gray-400 text-sm">Draw your signature here</p></div>}
           {hasStrokes && (
-            <button onClick={clearCanvas} className="absolute top-2 right-2 px-3 py-1 rounded-lg bg-white/80 border border-gray-200 text-xs text-gray-600 hover:bg-white">
-              Clear
-            </button>
+            <button onClick={clearCanvas} className="absolute top-2 right-2 px-3 py-1 rounded-lg bg-white/80 border border-gray-200 text-xs text-gray-600 hover:bg-white">Clear</button>
           )}
         </div>
       ) : (
         <div className="mb-4">
-          <input type="text" value={text} onChange={e => setText(e.target.value)}
-            placeholder="Type your name"
-            className="w-full px-4 py-4 rounded-xl bg-white border-2 border-border text-gray-800 text-2xl italic focus:outline-none focus:border-accent"
-            style={{ fontFamily: 'Georgia, serif' }}
-          />
+          <input type="text" value={text} onChange={e => setText(e.target.value)} placeholder="Type your name" disabled={disabled}
+            className="w-full px-4 py-4 rounded-xl bg-white border-2 border-border text-gray-800 text-2xl italic focus:outline-none focus:border-accent disabled:opacity-50"
+            style={{ fontFamily: 'Georgia, serif' }} />
         </div>
       )}
 
-      <button onClick={capture} disabled={!canProceed} className="btn-primary w-full disabled:opacity-50">
-        Apply Signature →
+      <button onClick={capture} disabled={!canProceed || disabled} className="btn-primary w-full disabled:opacity-50">
+        Apply My Signature →
       </button>
-    </div>
-  );
-}
-
-// ─── Document preview with placement highlights ───────────────────────────────
-
-function DocPreview({ pageImages, placements, currentPage }: {
-  pageImages: { dataUrl: string; natW: number; natH: number }[];
-  placements: Placement[];
-  currentPage: number;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const page = pageImages[currentPage];
-  const pagePlacements = placements.filter(p => p.page === currentPage);
-
-  // Scale placements from natural coords to display coords
-  const [displayW, setDisplayW] = useState(0);
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const obs = new ResizeObserver(entries => setDisplayW(entries[0].contentRect.width));
-    obs.observe(containerRef.current);
-    return () => obs.disconnect();
-  }, []);
-
-  const scale = displayW > 0 ? displayW / page.natW : 1;
-
-  return (
-    <div ref={containerRef} className="relative rounded-xl overflow-hidden border border-border mb-4" style={{ background: '#f5f5f5' }}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={page.dataUrl} alt={`Page ${currentPage + 1}`} className="w-full block" draggable={false} />
-      {pagePlacements.map((p, i) => (
-        <div
-          key={i}
-          style={{
-            left: p.x * scale, top: p.y * scale,
-            width: p.w * scale, height: p.h * scale,
-          }}
-          className="absolute border-2 border-dashed border-accent rounded bg-accent/10 flex items-center justify-center"
-        >
-          <span className="text-accent text-xs font-semibold opacity-70">Sign here</span>
-        </div>
-      ))}
     </div>
   );
 }
@@ -222,149 +232,115 @@ function DocPreview({ pageImages, placements, currentPage }: {
 export default function PublicSignPage() {
   const { token } = useParams<{ token: string }>();
 
-  const [status,     setStatus]     = useState<Status>('loading');
-  const [reqData,    setReqData]    = useState<RequestData | null>(null);
-  const [pageImages, setPageImages] = useState<{ dataUrl: string; natW: number; natH: number }[]>([]);
+  const [status,      setStatus]      = useState<PageStatus>('loading');
+  const [signerData,  setSignerData]  = useState<SignerData | null>(null);
+  const [pageImages,  setPageImages]  = useState<{ dataUrl: string; natW: number; natH: number }[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
-  const [blobUrl,    setBlobUrl]    = useState('');
-  const [fileName,   setFileName]   = useState('');
-  const [error,      setError]      = useState('');
+  const [errorMsg,    setErrorMsg]    = useState('');
+  const [isComplete,  setIsComplete]  = useState(false);
 
   useEffect(() => {
-    api.requests.get(token)
+    api.requests.getForSigner(token)
       .then(async data => {
-        setReqData(data);
-        if (data.documentType === 'pdf') {
-          const pages = await renderPdfAllPages(data.documentData);
-          setPageImages(pages);
-        } else {
-          const img = await loadImage(data.documentData);
-          setPageImages([{ dataUrl: data.documentData, natW: img.naturalWidth, natH: img.naturalHeight }]);
-        }
+        setSignerData(data);
+        const pages = data.documentType === 'pdf'
+          ? await renderPdfAllPages(data.documentData)
+          : await (async () => {
+              const img = await loadImage(data.documentData);
+              return [{ dataUrl: data.documentData, natW: img.naturalWidth, natH: img.naturalHeight }];
+            })();
+        setPageImages(pages);
         setStatus('ready');
       })
       .catch(err => {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('Already signed')) setStatus('already_signed');
-        else { setError(msg); setStatus('error'); }
+        if (msg.includes('Already signed'))    setStatus('already_signed');
+        else if (msg.includes('not_your_turn')) setStatus('not_your_turn');
+        else if (msg.includes('fully signed') || msg.includes('Document fully')) setStatus('all_complete');
+        else { setErrorMsg(msg); setStatus('error'); }
       });
   }, [token]);
 
-  const handleSign = useCallback(async (sigDataUrl: string) => {
-    if (!reqData) return;
+  const handleSign = useCallback(async (signatureData: string) => {
+    if (!signerData) return;
     setStatus('signing');
     try {
-      // Build composite PDF with all pages
-      const pdfDoc = await PDFDocument.create();
-      const sigImg = await loadImage(sigDataUrl);
-
-      for (let pageIdx = 0; pageIdx < pageImages.length; pageIdx++) {
-        const pageInfo = pageImages[pageIdx];
-        const pagePlacements = reqData.placements.filter(p => p.page === pageIdx);
-
-        const canvas = document.createElement('canvas');
-        canvas.width  = pageInfo.natW;
-        canvas.height = pageInfo.natH;
-        const ctx = canvas.getContext('2d')!;
-        const docImg = await loadImage(pageInfo.dataUrl);
-        ctx.drawImage(docImg, 0, 0);
-
-        for (const p of pagePlacements) {
-          ctx.drawImage(sigImg, p.x, p.y, p.w, p.h);
-        }
-
-        const composited = canvas.toDataURL('image/png');
-        const pngBytes = await fetch(composited).then(r => r.arrayBuffer());
-        const pngImage = await pdfDoc.embedPng(pngBytes);
-        const pdfPage  = pdfDoc.addPage([pageInfo.natW, pageInfo.natH]);
-        pdfPage.drawImage(pngImage, { x: 0, y: 0, width: pageInfo.natW, height: pageInfo.natH });
-      }
-
-      const pdfBytes = await pdfDoc.save();
-      // Convert in chunks to avoid "Maximum call stack size exceeded" on large PDFs
-      let binary = '';
-      const CHUNK = 8192;
-      for (let i = 0; i < pdfBytes.length; i += CHUNK) {
-        binary += String.fromCharCode(...pdfBytes.subarray(i, i + CHUNK));
-      }
-      const base64   = btoa(binary);
-      const signedPdf = `data:application/pdf;base64,${base64}`;
-
-      // Submit to backend
-      await api.requests.sign(token, signedPdf);
-
-      // Offer download
-      const blob = new Blob([pdfBytes.buffer as ArrayBuffer], { type: 'application/pdf' });
-      const url  = URL.createObjectURL(blob);
-      const name = `signed-${reqData.documentName.replace(/\.[^.]+$/, '')}.pdf`;
-      setBlobUrl(url);
-      setFileName(name);
+      const res = await api.requests.sign(token, signatureData);
+      setIsComplete(res.complete);
       setStatus('done');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to sign document');
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to submit signature');
       setStatus('error');
     }
-  }, [reqData, pageImages, token]);
+  }, [signerData, token]);
 
-  // ── Render states ──
-
+  // ── Loading ──
   if (status === 'loading') return (
     <div className="min-h-screen flex items-center justify-center bg-bg">
       <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
     </div>
   );
 
+  // ── Already signed ──
   if (status === 'already_signed') return (
-    <div className="min-h-screen flex items-center justify-center bg-bg px-6">
-      <div className="max-w-sm w-full text-center">
-        <div className="w-16 h-16 rounded-full bg-success/10 border-2 border-success/30 flex items-center justify-center mx-auto mb-4">
-          <svg className="w-8 h-8 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        </div>
-        <h1 className="text-xl font-bold text-text1 mb-2">Already signed</h1>
-        <p className="text-text2 text-sm">This document has already been signed.</p>
-      </div>
-    </div>
+    <CenteredCard icon="✓" iconClass="bg-success/10 border-success/30 text-success" title="Already signed" message="You have already signed this document." />
   );
 
+  // ── Not your turn ──
+  if (status === 'not_your_turn') return (
+    <CenteredCard icon="⏳" iconClass="bg-accent/10 border-accent/30 text-accent" title="Not your turn yet"
+      message="You will receive an email notification when it is your turn to sign." />
+  );
+
+  // ── All complete ──
+  if (status === 'all_complete') return (
+    <CenteredCard icon="✓" iconClass="bg-success/10 border-success/30 text-success" title="Document fully signed"
+      message="All parties have signed this document." />
+  );
+
+  // ── Error ──
   if (status === 'error') return (
-    <div className="min-h-screen flex items-center justify-center bg-bg px-6">
-      <div className="max-w-sm w-full text-center">
-        <div className="w-16 h-16 rounded-full bg-danger/10 border-2 border-danger/30 flex items-center justify-center mx-auto mb-4">
-          <svg className="w-8 h-8 text-danger" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
-        </div>
-        <h1 className="text-xl font-bold text-text1 mb-2">Error</h1>
-        <p className="text-text2 text-sm">{error || 'This signing link is invalid or has expired.'}</p>
-      </div>
-    </div>
+    <CenteredCard icon="✕" iconClass="bg-danger/10 border-danger/30 text-danger" title="Something went wrong"
+      message={errorMsg || 'This signing link is invalid or has expired.'} />
   );
 
+  // ── Done ──
   if (status === 'done') return (
-    <div className="min-h-screen flex items-center justify-center bg-bg px-6">
-      <div className="max-w-sm w-full text-center">
-        <div className="w-16 h-16 rounded-full bg-success/10 border-2 border-success/30 flex items-center justify-center mx-auto mb-4">
-          <svg className="w-8 h-8 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        </div>
-        <h1 className="text-xl font-bold text-text1 mb-2">Document signed!</h1>
-        <p className="text-text2 text-sm mb-6">Thank you for signing. Download your copy below.</p>
-        <a href={blobUrl} download={fileName}
-          className="btn-primary flex items-center justify-center gap-2 no-underline mb-3">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-          Download signed PDF
-        </a>
+    <CenteredCard
+      icon="✓"
+      iconClass="bg-success/10 border-success/30 text-success"
+      title="Document signed!"
+      message={isComplete
+        ? 'All parties have now signed. The document owner has been notified and can download the final document.'
+        : 'Thank you! The next signer has been notified by email and will be prompted to sign.'}
+    />
+  );
+
+  // ── Signing in progress (spinner) ──
+  if (status === 'signing') return (
+    <div className="min-h-screen flex items-center justify-center bg-bg">
+      <div className="text-center">
+        <div className="w-12 h-12 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+        <p className="text-text2 text-sm">Submitting your signature…</p>
       </div>
     </div>
   );
 
-  // status === 'ready' | 'signing'
+  // ── Ready to sign ──
+  if (!signerData) return null;
+
+  const hasAnySpotsOnPage = (pageIdx: number) =>
+    signerData.myPlacements.some(p => p.page === pageIdx) ||
+    signerData.completedSlots.some(s => s.placements.some(p => p.page === pageIdx)) ||
+    signerData.futurePlacements.some(p => p.page === pageIdx);
+
   return (
     <div className="min-h-screen bg-bg">
       {/* Header */}
       <div className="border-b border-border bg-surface/80 backdrop-blur-sm sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-6 py-4 flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-purple-700 flex items-center justify-center shadow-[0_0_16px_rgba(139,92,246,0.4)]">
-            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
+            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
           </div>
           <div className="flex-1">
             <span className="text-base font-bold text-text1">SignEase</span>
@@ -374,56 +350,101 @@ export default function PublicSignPage() {
       </div>
 
       <div className="max-w-2xl mx-auto px-6 py-8">
-        {/* Info card */}
+        {/* Info */}
         <div className="card p-5 mb-6">
-          <h1 className="text-lg font-bold text-text1 mb-0.5">You have been asked to sign a document</h1>
-          <p className="text-sm font-semibold text-text2 truncate">{reqData?.documentName}</p>
-          {reqData?.message && (
+          <div className="flex items-start justify-between gap-4 mb-1">
+            <h1 className="text-lg font-bold text-text1">You have been asked to sign</h1>
+            <span className="shrink-0 text-xs font-semibold text-accent bg-accent/10 border border-accent/30 px-2.5 py-1 rounded-full">
+              Signer {signerData.mySlot} of {signerData.totalSlots}
+            </span>
+          </div>
+          <p className="text-sm text-text2 truncate font-medium mb-1">{signerData.documentName}</p>
+          {signerData.message && (
             <div className="mt-3 p-3 rounded-xl bg-surface2 border border-border">
               <p className="text-xs text-text3 mb-0.5 font-semibold uppercase tracking-wider">Message</p>
-              <p className="text-sm text-text2">{reqData.message}</p>
+              <p className="text-sm text-text2">{signerData.message}</p>
             </div>
           )}
         </div>
+
+        {/* Signing progress bar */}
+        {signerData.totalSlots > 1 && (
+          <div className="card p-4 mb-6">
+            <p className="text-xs font-semibold text-text3 uppercase tracking-wider mb-3">Signing progress</p>
+            <div className="flex items-center gap-2">
+              {Array.from({ length: signerData.totalSlots }, (_, i) => {
+                const slot = i + 1;
+                const isDone = signerData.completedSlots.some(s => s.slot === slot);
+                const isMine = slot === signerData.mySlot;
+                return (
+                  <div key={slot} className="flex items-center gap-2 flex-1">
+                    <div className={`w-7 h-7 rounded-full border-2 flex items-center justify-center text-xs font-bold ${
+                      isDone ? 'bg-success border-success text-white' :
+                      isMine ? 'border-accent text-accent' :
+                               'border-border text-text3'
+                    }`}>
+                      {isDone ? '✓' : slot}
+                    </div>
+                    {i < signerData.totalSlots - 1 && <div className={`flex-1 h-px ${isDone ? 'bg-success' : 'bg-border'}`} />}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Page tabs */}
         {pageImages.length > 1 && (
           <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
-            {pageImages.map((_, i) => {
-              const hasSpots = reqData?.placements.some(p => p.page === i);
-              return (
-                <button key={i} onClick={() => setCurrentPage(i)}
-                  className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    i === currentPage ? 'bg-accent text-white' : 'bg-surface2 border border-border text-text2 hover:border-accent'
-                  }`}>
-                  Page {i + 1}{hasSpots ? ' ✓' : ''}
-                </button>
-              );
-            })}
+            {pageImages.map((_, i) => (
+              <button key={i} onClick={() => setCurrentPage(i)}
+                className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  i === currentPage ? 'bg-accent text-white' : 'bg-surface2 border border-border text-text2 hover:border-accent'
+                }`}>
+                Page {i + 1}{hasAnySpotsOnPage(i) ? ' ·' : ''}
+              </button>
+            ))}
           </div>
         )}
 
-        {/* Document preview */}
-        {pageImages.length > 0 && reqData && (
-          <DocPreview pageImages={pageImages} placements={reqData.placements} currentPage={currentPage} />
+        {/* Document view */}
+        {pageImages.length > 0 && (
+          <DocPageView pageImages={pageImages} signerData={signerData} currentPage={currentPage} />
         )}
 
         {/* Signature pad */}
-        <div className="card p-5">
-          <h2 className="text-sm font-bold text-text1 mb-4">Your signature</h2>
-          {status === 'signing' ? (
-            <div className="flex flex-col items-center gap-3 py-8 text-text2">
-              <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-              <span className="text-sm">Applying your signature…</span>
+        <div className="card p-5 mb-4">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-white text-sm font-bold shrink-0">
+              {signerData.mySlot}
             </div>
-          ) : (
-            <SignaturePad onCapture={handleSign} />
-          )}
+            <div>
+              <p className="text-sm font-bold text-text1">Your signature — {signerData.myLabel}</p>
+              <p className="text-xs text-text3">{signerData.myPlacements.length} spot{signerData.myPlacements.length !== 1 ? 's' : ''} across all pages</p>
+            </div>
+          </div>
+          <SignaturePad onCapture={handleSign} />
         </div>
 
-        <p className="text-xs text-text3 text-center mt-4">
-          By signing, you agree that this is a legally binding electronic signature.
+        <p className="text-xs text-text3 text-center">
+          By signing, you agree this is a legally binding electronic signature.
         </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Reusable centered card ────────────────────────────────────────────────────
+
+function CenteredCard({ icon, iconClass, title, message }: { icon: string; iconClass: string; title: string; message: string }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-bg px-6">
+      <div className="max-w-sm w-full text-center">
+        <div className={`w-16 h-16 rounded-full border-2 flex items-center justify-center text-2xl font-bold mx-auto mb-4 ${iconClass}`}>
+          {icon}
+        </div>
+        <h1 className="text-xl font-bold text-text1 mb-2">{title}</h1>
+        <p className="text-text2 text-sm">{message}</p>
       </div>
     </div>
   );

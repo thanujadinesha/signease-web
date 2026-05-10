@@ -169,6 +169,16 @@ function DashboardContent() {
           </p>
         </div>
 
+        {/* My Requests shortcut */}
+        {(TIER_ORDER[tier] ?? 0) >= 1 && (
+          <Link href="/dashboard/requests"
+            className="flex items-center gap-3 mb-6 px-5 py-3 rounded-xl border border-border hover:border-accent/50 transition-colors">
+            <svg className="w-4 h-4 text-text3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+            <span className="text-sm text-text2 flex-1">Track signing requests you&apos;ve sent</span>
+            <span className="text-xs font-semibold text-accent2">My Requests →</span>
+          </Link>
+        )}
+
         {/* Flow cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           {FLOWS.map(flow => (

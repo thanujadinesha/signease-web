@@ -113,27 +113,41 @@ export const api = {
       documentName: string;
       documentData: string;
       documentType?: string;
-      recipientEmail?: string;
       message?: string;
-      placements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number }[];
-    }) => request<{ id: string; token: string; createdAt: string }>('/api/requests', {
+      placements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number; slot: number }[];
+      signers: { slot: number; email: string; label: string }[];
+    }) => request<{ id: string }>('/api/requests', {
       method: 'POST', body: JSON.stringify(body),
     }),
+
     list: () => request<{
-      requests: { id: string; documentName: string; recipientEmail: string | null; status: string; token: string; createdAt: string; signedAt: string | null }[];
+      requests: {
+        id: string; documentName: string; status: string;
+        currentSlot: number; totalSlots: number; createdAt: string;
+        slots: { slot: number; label: string; email: string; signed_at: string | null }[];
+      }[];
     }>('/api/requests'),
-    get: (token: string) => request<{
+
+    getById: (id: string) => request<{
       id: string; documentName: string; documentData: string; documentType: string;
-      recipientEmail: string | null; message: string | null;
-      placements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number }[];
-      createdAt: string;
-    }>(`/api/requests/${token}`),
-    sign: (token: string, signedPdf: string) =>
-      request<{ success: boolean }>(`/api/requests/${token}/sign`, {
-        method: 'POST', body: JSON.stringify({ signedPdf }),
+      placements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number; slot: number }[];
+      status: string; currentSlot: number; totalSlots: number; createdAt: string;
+      slots: { slot: number; label: string; email: string; signed_at: string | null; signature_data: string | null }[];
+    }>(`/api/requests/${id}`),
+
+    getForSigner: (token: string) => request<{
+      requestId: string; documentName: string; documentData: string; documentType: string;
+      message: string | null; mySlot: number; myLabel: string;
+      myPlacements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number }[];
+      futurePlacements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number; slot: number }[];
+      completedSlots: { slot: number; label: string; signatureData: string; signedAt: string; placements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number }[] }[];
+      totalSlots: number;
+    }>(`/api/requests/sign/${token}`),
+
+    sign: (token: string, signatureData: string) =>
+      request<{ success: boolean; complete: boolean }>(`/api/requests/sign/${token}`, {
+        method: 'POST', body: JSON.stringify({ signatureData }),
       }),
-    getSigned: (token: string) =>
-      request<{ signedPdf: string; documentName: string }>(`/api/requests/${token}/signed`),
   },
   billing: {
     checkout: (plan: 'pro' | 'premium' | 'seat') =>
