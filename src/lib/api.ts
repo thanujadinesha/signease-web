@@ -133,6 +133,8 @@ export const api = {
       documentData: string;
       documentType?: string;
       message?: string;
+      expiresInDays?: number;
+      reminderInterval?: number;
       placements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number; slot: number }[];
       signers: { slot: number; email: string; label: string }[];
     }) => request<{ id: string }>('/api/requests', {
@@ -143,6 +145,7 @@ export const api = {
       requests: {
         id: string; documentName: string; status: string;
         currentSlot: number; totalSlots: number; createdAt: string;
+        expiresAt: string | null; reminderInterval: number | null;
         slots: { slot: number; label: string; email: string; signed_at: string | null }[];
       }[];
     }>('/api/requests'),
@@ -151,6 +154,7 @@ export const api = {
       id: string; documentName: string; documentData: string; documentType: string;
       placements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number; slot: number }[];
       status: string; currentSlot: number; totalSlots: number; createdAt: string;
+      expiresAt: string | null; reminderInterval: number | null;
       slots: { slot: number; label: string; email: string; signed_at: string | null; signature_data: string | null }[];
     }>(`/api/requests/${id}`),
 

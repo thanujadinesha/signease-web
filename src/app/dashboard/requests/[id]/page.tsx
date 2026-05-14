@@ -13,6 +13,7 @@ type RequestDetail = {
   id: string; documentName: string; documentData: string; documentType: string;
   placements: { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number; slot: number }[];
   status: string; currentSlot: number; totalSlots: number; createdAt: string;
+  expiresAt: string | null; reminderInterval: number | null;
   slots: SlotRow[];
 };
 
@@ -245,7 +246,19 @@ function RequestDetailContent() {
 
   const signedCount = detail.slots.filter(s => s.signed_at).length;
   const isComplete  = detail.status === 'completed';
+  const isExpired   = detail.status === 'expired';
   const pct = detail.totalSlots > 0 ? Math.round((signedCount / detail.totalSlots) * 100) : 0;
+
+  function expiryText() {
+    if (!detail.expiresAt) return null;
+    const exp  = new Date(detail.expiresAt);
+    const now  = new Date();
+    const diff = Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    if (isExpired) return `Expired on ${fmtDate(detail.expiresAt)}`;
+    if (diff <= 0) return 'Expiring today';
+    return `Expires in ${diff} day${diff !== 1 ? 's' : ''}`;
+  }
+  const expiry = expiryText();
 
   return (
     <div className="min-h-screen">
@@ -261,23 +274,35 @@ function RequestDetailContent() {
 
       <div className="max-w-3xl mx-auto px-6 py-8">
         {/* Status banner */}
-        <div className={`card p-5 mb-6 ${isComplete ? 'border-success/30 bg-success/5' : 'border-accent/20 bg-accent/5'}`}>
+        <div className={`card p-5 mb-6 ${
+          isComplete ? 'border-success/30 bg-success/5'
+          : isExpired ? 'border-danger/30 bg-danger/5'
+          : 'border-accent/20 bg-accent/5'
+        }`}>
           <div className="flex items-center justify-between gap-4 mb-3">
             <div>
-              <h2 className={`font-bold text-lg ${isComplete ? 'text-success' : 'text-text1'}`}>
-                {isComplete ? 'All signatures complete' : `Awaiting ${detail.totalSlots - signedCount} more signature${detail.totalSlots - signedCount !== 1 ? 's' : ''}`}
+              <h2 className={`font-bold text-lg ${isComplete ? 'text-success' : isExpired ? 'text-danger' : 'text-text1'}`}>
+                {isComplete ? 'All signatures complete'
+                  : isExpired ? 'Signing request expired'
+                  : `Awaiting ${detail.totalSlots - signedCount} more signature${detail.totalSlots - signedCount !== 1 ? 's' : ''}`}
               </h2>
               <p className="text-xs text-text3 mt-0.5">Created {fmtDate(detail.createdAt)}</p>
             </div>
-            <span className={`text-2xl font-bold ${isComplete ? 'text-success' : 'text-accent'}`}>
+            <span className={`text-2xl font-bold ${isComplete ? 'text-success' : isExpired ? 'text-danger' : 'text-accent'}`}>
               {signedCount}/{detail.totalSlots}
             </span>
           </div>
           <div className="h-2 rounded-full bg-border overflow-hidden">
-            <div className={`h-full rounded-full transition-all ${isComplete ? 'bg-success' : 'bg-accent'}`} style={{ width: `${pct}%` }} />
+            <div className={`h-full rounded-full transition-all ${isComplete ? 'bg-success' : isExpired ? 'bg-danger' : 'bg-accent'}`} style={{ width: `${pct}%` }} />
           </div>
-          {!isComplete && (
+          {!isComplete && !isExpired && (
             <p className="text-xs text-text3 mt-2">This page refreshes automatically every 15 seconds.</p>
+          )}
+          {expiry && (
+            <p className={`text-xs mt-2 ${isExpired ? 'text-danger' : 'text-text3'}`}>{expiry}</p>
+          )}
+          {detail.reminderInterval && !isComplete && !isExpired && (
+            <p className="text-xs text-text3 mt-1">Reminders sent every {detail.reminderInterval} day{detail.reminderInterval !== 1 ? 's' : ''}.</p>
           )}
         </div>
 

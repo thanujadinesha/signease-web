@@ -8,6 +8,7 @@ import AuthGuard from '@/components/AuthGuard';
 type RequestRow = {
   id: string; documentName: string; status: string;
   currentSlot: number; totalSlots: number; createdAt: string;
+  expiresAt: string | null; reminderInterval: number | null;
   slots: { slot: number; label: string; email: string; signed_at: string | null }[];
 };
 
@@ -19,6 +20,14 @@ function RequestCard({ r }: { r: RequestRow }) {
   const signedCount = r.slots.filter(s => s.signed_at).length;
   const pct = r.totalSlots > 0 ? Math.round((signedCount / r.totalSlots) * 100) : 0;
   const isComplete = r.status === 'completed';
+  const isExpired  = r.status === 'expired';
+
+  function statusBadge() {
+    if (isComplete) return { label: 'Complete',                  cls: 'text-success bg-success/10 border-success/30' };
+    if (isExpired)  return { label: 'Expired',                   cls: 'text-danger bg-danger/10 border-danger/30' };
+    return              { label: `${signedCount}/${r.totalSlots} signed`, cls: 'text-accent2 bg-accent/10 border-accent/30' };
+  }
+  const badge = statusBadge();
 
   return (
     <Link href={`/dashboard/requests/${r.id}`} className="card p-5 block hover:border-accent/50 transition-colors">
@@ -27,12 +36,8 @@ function RequestCard({ r }: { r: RequestRow }) {
           <p className="font-semibold text-text1 truncate">{r.documentName}</p>
           <p className="text-xs text-text3 mt-0.5">{fmtDate(r.createdAt)}</p>
         </div>
-        <span className={`shrink-0 text-xs font-bold px-2.5 py-1 rounded-full border ${
-          isComplete
-            ? 'text-success bg-success/10 border-success/30'
-            : 'text-accent2 bg-accent/10 border-accent/30'
-        }`}>
-          {isComplete ? 'Complete' : `${signedCount}/${r.totalSlots} signed`}
+        <span className={`shrink-0 text-xs font-bold px-2.5 py-1 rounded-full border ${badge.cls}`}>
+          {badge.label}
         </span>
       </div>
 

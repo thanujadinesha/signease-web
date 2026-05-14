@@ -404,10 +404,12 @@ function RecipientsStep({ doc, placements, signers: initialSigners, onDone, onBa
   onDone: (requestId: string) => void;
   onBack: () => void;
 }) {
-  const [signers,  setSigners]  = useState<Signer[]>(initialSigners);
-  const [message,  setMessage]  = useState('');
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState('');
+  const [signers,          setSigners]          = useState<Signer[]>(initialSigners);
+  const [message,          setMessage]          = useState('');
+  const [expiresInDays,    setExpiresInDays]    = useState(0);
+  const [reminderInterval, setReminderInterval] = useState(0);
+  const [loading,          setLoading]          = useState(false);
+  const [error,            setError]            = useState('');
 
   function updateEmail(slot: number, email: string) {
     setSigners(prev => prev.map(s => s.slot === slot ? { ...s, email } : s));
@@ -426,6 +428,8 @@ function RecipientsStep({ doc, placements, signers: initialSigners, onDone, onBa
         documentData: doc.dataUrl,
         documentType: doc.type,
         message: message.trim() || undefined,
+        expiresInDays: expiresInDays || undefined,
+        reminderInterval: reminderInterval || undefined,
         placements,
         signers: signers.map(s => ({ slot: s.slot, email: s.email.trim(), label: s.label })),
       });
@@ -464,7 +468,7 @@ function RecipientsStep({ doc, placements, signers: initialSigners, onDone, onBa
         })}
       </div>
 
-      <div className="mb-6">
+      <div className="mb-4">
         <label className="block text-xs font-semibold text-text2 mb-1.5">Message (optional)</label>
         <textarea
           value={message} onChange={e => setMessage(e.target.value)}
@@ -472,6 +476,38 @@ function RecipientsStep({ doc, placements, signers: initialSigners, onDone, onBa
           rows={3}
           className="w-full bg-surface2 border border-border rounded-xl px-4 py-3 text-sm text-text1 placeholder-text3 focus:outline-none focus:border-accent transition-colors resize-none"
         />
+      </div>
+
+      {/* Expiry & reminders */}
+      <div className="grid grid-cols-2 gap-3 mb-6">
+        <div>
+          <label className="block text-xs font-semibold text-text2 mb-1.5">Expires in</label>
+          <select
+            value={expiresInDays}
+            onChange={e => setExpiresInDays(Number(e.target.value))}
+            className="w-full bg-surface2 border border-border rounded-xl px-3 py-2.5 text-sm text-text1 focus:outline-none focus:border-accent transition-colors"
+          >
+            <option value={0}>No expiry</option>
+            <option value={3}>3 days</option>
+            <option value={7}>7 days</option>
+            <option value={14}>14 days</option>
+            <option value={30}>30 days</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-text2 mb-1.5">Remind every</label>
+          <select
+            value={reminderInterval}
+            onChange={e => setReminderInterval(Number(e.target.value))}
+            className="w-full bg-surface2 border border-border rounded-xl px-3 py-2.5 text-sm text-text1 focus:outline-none focus:border-accent transition-colors"
+          >
+            <option value={0}>No reminders</option>
+            <option value={1}>1 day</option>
+            <option value={2}>2 days</option>
+            <option value={3}>3 days</option>
+            <option value={7}>7 days</option>
+          </select>
+        </div>
       </div>
 
       <div className="card p-4 mb-6 border-accent/20 bg-accent/5">

@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type SigMode = 'draw' | 'type';
-type PageStatus = 'loading' | 'ready' | 'preview' | 'signing' | 'done' | 'already_signed' | 'not_your_turn' | 'all_complete' | 'error';
+type PageStatus = 'loading' | 'ready' | 'preview' | 'signing' | 'done' | 'already_signed' | 'not_your_turn' | 'all_complete' | 'expired' | 'error';
 
 interface Placement { x: number; y: number; w: number; h: number; page: number; pageW: number; pageH: number }
 interface CompletedSlot { slot: number; label: string; signatureData: string; signedAt: string; placements: Placement[] }
@@ -370,9 +370,10 @@ export default function PublicSignPage() {
       })
       .catch(err => {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('Already signed'))    setStatus('already_signed');
-        else if (msg.includes('not_your_turn')) setStatus('not_your_turn');
+        if (msg.includes('Already signed'))                          setStatus('already_signed');
+        else if (msg.includes('not_your_turn'))                      setStatus('not_your_turn');
         else if (msg.includes('fully signed') || msg.includes('Document fully')) setStatus('all_complete');
+        else if (msg.includes('request_expired'))                    setStatus('expired');
         else { setErrorMsg(msg); setStatus('error'); }
       });
   }, [token]);
@@ -413,6 +414,12 @@ export default function PublicSignPage() {
   if (status === 'not_your_turn') return (
     <CenteredCard icon="⏳" iconClass="bg-accent/10 border-accent/30 text-accent" title="Not your turn yet"
       message="You will receive an email notification when it is your turn to sign." />
+  );
+
+  // ── Expired ──
+  if (status === 'expired') return (
+    <CenteredCard icon="⏰" iconClass="bg-danger/10 border-danger/30 text-danger" title="Signing link expired"
+      message="This signing request has expired. Please contact the document owner to create a new request." />
   );
 
   // ── All complete ──
